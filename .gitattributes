@@ -1,8 +1,15 @@
-# Consistent, OS-agnostic line endings: the repo stores LF and every checkout
-# keeps LF on all platforms. This keeps the embedded assets (and therefore the
-# emitted codebase-dsm.html) byte-stable regardless of where the tool is built.
+# Byte-identical checkouts on every machine and every platform. The repo stores LF and
+# every checkout keeps LF, whatever core.autocrlf that machine happens to have (it is
+# `true` on the Windows boxes here, which would otherwise rewrite the tree to CRLF while
+# a Linux agent session sees LF — one commit, two different sets of bytes). This keeps the
+# embedded assets, and therefore the emitted codebase-dsm.html, byte-stable regardless of
+# where the tool is built.
 * text=auto eol=lf
 
-# Windows batch files need CRLF — cmd.exe mis-parses LF-only .bat (the EOL
-# gets glued into the next token, eating its first character).
+# Batch stays CRLF on every platform, including Linux. cmd.exe is DOCUMENTED to mis-parse
+# LF-only .bat (labels, `call :label`, multi-line `( ... )` blocks), but that was measured
+# TOLERANT on Windows 11 26200 across all of those constructs on 2026-08-24 — so this pin
+# is the declared guarantee, not an observed necessity, and it holds because tolerance is
+# a property of the build and nothing should rest on which build runs the file.
 *.bat text eol=crlf
+*.cmd text eol=crlf
