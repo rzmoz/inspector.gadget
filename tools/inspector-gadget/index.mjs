@@ -114,11 +114,25 @@ function runDotnetHelper(root) {
   catch (e) { throw new Error(`could not parse dotnet helper output: ${e.message}`); }
 }
 
-// Every raw shape merges the same way, single analyzer or two, so the skip list
-// is deduped and ordinal-sorted on exactly one path.
+// Every raw shape goes through here, single analyzer or two, so the skip list is
+// deduped and ordinal-sorted on exactly one path. The BODIES are only merged when
+// there are two: on a 20k-file target the concatenation and the re-sort are the
+// largest allocation in the run, and one analyzer needs neither.
 export function mergeRaw(parts) {
-  const out = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [], skips: [] };
+  const skips = [];
   for (const { label, raw } of parts) {
+    // an absent skips key means "this analyzer cannot say what it lost", which is
+    // itself a loss — recorded, never defaulted away to an empty list.
+    if (Array.isArray(raw.skips)) skips.push(...raw.skips);
+    else skips.push({ stage: 'analyzer.contract', subject: label, reason: 'NOSKIPS' });
+    if (raw.files.length === 0 && parts.length > 1) {
+      skips.push({ stage: 'analyzer.empty', subject: label, reason: 'NOFILES' });
+    }
+  }
+  const out = parts.length === 1
+    ? { ...parts[0].raw }
+    : { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [] };
+  for (const { raw } of parts.length === 1 ? [] : parts) {
     out.files.push(...raw.files);
     Object.assign(out.fileCtx, raw.fileCtx);
     Object.assign(out.fileNs, raw.fileNs);
@@ -126,16 +140,9 @@ export function mergeRaw(parts) {
     out.tpEdges.push(...raw.tpEdges);
     out.tpPkgs.push(...raw.tpPkgs);
     out.typeXctxEdges.push(...raw.typeXctxEdges);
-    // an absent skips key means "this analyzer cannot say what it lost", which is
-    // itself a loss — recorded, never defaulted away to an empty list.
-    if (Array.isArray(raw.skips)) out.skips.push(...raw.skips);
-    else out.skips.push({ stage: 'analyzer.contract', subject: label, reason: 'NOSKIPS' });
-    if (raw.files.length === 0 && parts.length > 1) {
-      out.skips.push({ stage: 'analyzer.empty', subject: label, reason: 'NOFILES' });
-    }
   }
   out.files.sort(); // deterministic merged order
-  out.skips = sortSkips(out.skips);
+  out.skips = sortSkips(skips);
   return out;
 }
 
@@ -204,7 +211,10 @@ function main(argv) {
 
   const title = path.basename(root) || root;
   const outputDsm = path.join(root, 'codebase-dsm.html');
-  render(model, { root, title, outputDsm, assetsDir: ASSETS_DIR });
+  // fill() throws on a template/renderer mismatch. main() owns the exit ladder,
+  // so that has to arrive as a 2 rather than as an uncaught stack trace.
+  try { render(model, { root, title, outputDsm, assetsDir: ASSETS_DIR }); }
+  catch (e) { process.stderr.write(`error: ${e.message}\n`); return 2; }
   return 0;
 }
 

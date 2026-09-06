@@ -97,18 +97,46 @@ test('aliases deferred to an extends chain are a recorded blind spot, not an abs
   });
 });
 
-test('an unresolved relative module is recorded; a relative asset is not', () => {
+test('an extends chain is recorded even when the config also carries local paths', () => {
+  // the base config's paths are unread either way, so keying the record on the
+  // LOCAL table being empty would report the rarest of the three shapes only
+  withFixture({
+    'app/src/d.ts': 'export const d = 1;\n',
+    'lib/src/util/index.ts': 'export const helper = 1;\n',
+    'app/tsconfig.json': '{"extends":"../base.json","compilerOptions":{"paths":{"@lib/*":["../lib/src/*"]}}}',
+  }, ({ root }) => {
+    const r = run(root, '--ecosystem=ts');
+    assert.deepEqual(stageCounts(r), { 'ts.alias': 1 });
+    assert.equal(r.json.skipped.sample[0].reason, 'EXTENDS');
+  });
+});
+
+test('an unresolved relative module is recorded once per file; assets and unresolvable extensions are not', () => {
   withFixture({
     'app/src/e.ts':
       "import { x } from './does-not-exist';\n" +
+      "import { y } from './also-missing';\n" +
       "import './styles.css';\n" +
       "import logo from './logo.svg';\n" +
-      'export const e = x;\n',
+      "import { z } from './sibling.mjs';\n" +
+      'export const e = x + y + z;\n',
   }, ({ root }) => {
     const r = run(root, '--ecosystem=ts');
     assert.deepEqual(stageCounts(r), { 'ts.unresolved': 1 },
-      'a .css/.svg import is an asset, not a lost module — recording those would make PARTIAL READ meaningless');
+      'two lost modules in one file are one lost subject; .css/.svg are assets; .mjs is an extension the resolver never had a candidate for');
+    assert.equal(r.json.skipped.sample[0].subject, 'app/src/e.ts');
     assert.equal(r.json.skipped.sample[0].reason, 'NOTARGET');
+  });
+});
+
+test('two files each losing a module are two subjects', () => {
+  withFixture({
+    'app/src/one.ts': "import { a } from './gone';\nexport const one = a;\n",
+    'app/src/two.ts': "import { b } from './gone';\nexport const two = b;\n",
+  }, ({ root }) => {
+    const r = run(root, '--ecosystem=ts');
+    assert.deepEqual(stageCounts(r), { 'ts.unresolved': 2 });
+    assert.deepEqual(r.json.skipped.sample.map(s => s.subject), ['app/src/one.ts', 'app/src/two.ts']);
   });
 });
 
@@ -117,6 +145,7 @@ test('records are stable classifiers: no messages, no absolute paths, no separat
     'app/src/f.ts': "import { x } from './gone';\nexport const f = x;\n",
     'app/tsconfig.json': '{"extends":"../base.json"}',
     'lib/src': 'not a directory\n',
+    'zed/src': 'not a directory either\n',
   }, ({ root }) => {
     const skips = run(root, '--ecosystem=ts').json.skipped.sample;
     assert.ok(skips.length >= 3, 'the fixture must actually produce records for this case to measure anything');

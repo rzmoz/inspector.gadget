@@ -73,7 +73,7 @@ internal static class Analyzer
         var asmSeen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var cs in csprojs)
         {
-            string asm = AsmName(cs, log, Rel(root, cs));
+            string asm = AsmName(cs, log, root);
             string? dll = FindDll(Path.GetDirectoryName(cs)!, asm, log);
             if (dll == null) continue;
             if (asmSeen.Add(asm)) firstPartyDlls.Add((asm, dll));
@@ -217,7 +217,7 @@ internal static class Analyzer
 
     // the filename fallback is a GUESS, and a guessed assembly name is what
     // FindDll then looks for — so an unreadable project is recorded, not assumed away
-    private static string AsmName(string csproj, SkipLog log, string subject)
+    private static string AsmName(string csproj, SkipLog log, string root)
     {
         try
         {
@@ -225,7 +225,7 @@ internal static class Analyzer
             var an = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
             if (!string.IsNullOrWhiteSpace(an) && !an.Contains('$')) return an.Trim();
         }
-        catch (Exception e) { log.Add("dotnet.csproj", subject, Reason(e)); }
+        catch (Exception e) { log.Add("dotnet.csproj", Rel(root, csproj), Reason(e)); }
         return Path.GetFileNameWithoutExtension(csproj);
     }
 
@@ -370,13 +370,8 @@ internal static class Analyzer
                 break;
             }
             case HandleKind.TypeSpecification:
-            {
-                var col = new RefCollector();
-                try { r.GetTypeSpecification((TypeSpecificationHandle)h).DecodeSignature(col, null); }
-                catch (Exception e) { sink.Log.Add("dotnet.signature", sink.Subject, Reason(e)); break; }
-                foreach (var hh in col.Handles) Resolve(r, ctx, hh, ids, seen, sink);
+                DecodeInto(ids, seen, r, ctx, c => r.GetTypeSpecification((TypeSpecificationHandle)h).DecodeSignature(c, null), sink);
                 break;
-            }
             case HandleKind.MemberReference:
                 Resolve(r, ctx, r.GetMemberReference((MemberReferenceHandle)h).Parent, ids, seen, sink);
                 break;
@@ -390,20 +385,14 @@ internal static class Analyzer
             {
                 var ms = r.GetMethodSpecification((MethodSpecificationHandle)h);
                 Resolve(r, ctx, ms.Method, ids, seen, sink);
-                var col = new RefCollector();
-                try { ms.DecodeSignature(col, null); }
-                catch (Exception e) { sink.Log.Add("dotnet.signature", sink.Subject, Reason(e)); break; }
-                foreach (var hh in col.Handles) Resolve(r, ctx, hh, ids, seen, sink);
+                DecodeInto(ids, seen, r, ctx, c => ms.DecodeSignature(c, null), sink);
                 break;
             }
             case HandleKind.StandaloneSignature:
-            {
-                var col = new RefCollector();
-                try { r.GetStandaloneSignature((StandaloneSignatureHandle)h).DecodeMethodSignature(col, null); }
-                catch (Exception e) { sink.Log.Add("dotnet.signature", sink.Subject, Reason(e)); break; }
-                foreach (var hh in col.Handles) Resolve(r, ctx, hh, ids, seen, sink);
+                // the one dotnet.signature site; the three cases that used to inline
+                // this block each typed the same record line into their own copy
+                DecodeInto(ids, seen, r, ctx, c => r.GetStandaloneSignature((StandaloneSignatureHandle)h).DecodeMethodSignature(c, null), sink);
                 break;
-            }
         }
     }
 

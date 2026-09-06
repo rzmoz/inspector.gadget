@@ -22,9 +22,13 @@ const SIDE_RE = /\bimport\s+['"]([^'"]+)['"]/g;
 const DYN_RE = /(?:\bimport\b|\brequire)\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 const TYPE_ONLY_RE = /^\s+type\b/;
 const TSCONFIG_RE = /^tsconfig.*\.json$/;
-// a relative specifier worth reporting when it resolves to nothing: bare, or a
-// module extension. `./styles.css` / `./logo.svg` are assets, not lost modules.
-const MODULE_SPEC_RE = /(^|\/)[^/.]+$|\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
+// A relative specifier worth reporting when it resolves to nothing: one the
+// resolver was SUPPOSED to be able to resolve. The extension set is derived from
+// resolveFile's candidates below and nowhere else — a second hand-maintained list
+// drifts, and a deny-by-omission list over an open set of asset extensions is the
+// wrong shape. `./styles.css` / `./logo.svg` are assets, not lost modules.
+const RESOLVABLE_EXTS = ['.ts', '.tsx', '.js'];
+const MODULE_SPEC_RE = new RegExp(`(^|/)[^/.]+$|(${RESOLVABLE_EXTS.map(e => '\\' + e).join('|')})$`);
 
 // reason is a STABLE CLASSIFIER, never e.message: messages carry absolute paths
 // and errno prose, and the artifact must diff cleanly across runs and machines.
@@ -33,14 +37,11 @@ const skipReason = (e) => (e && (e.code || e.name)) || 'Error';
 // absolute path would embed the machine and the checkout location in the artifact.
 const rec = (skips, stage, subject, reason) => { skips.push({ stage, subject, reason }); };
 
-function safeDirNames(dir, subject, skips) {
-  try { return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); }
+function safeReaddir(dir, subject, skips) {
+  try { return fs.readdirSync(dir, { withFileTypes: true }); }
   catch (e) { rec(skips, 'ts.readdir', subject, skipReason(e)); return []; }
 }
-function safeFileNames(dir, subject, skips) {
-  try { return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name); }
-  catch (e) { rec(skips, 'ts.readdir', subject, skipReason(e)); return []; }
-}
+const namesOf = (entries, pick) => entries.filter(pick).map(d => d.name);
 function toNative(posixPath) { return posixPath.split('/').join(path.sep); }
 function readText(p) { return fs.readFileSync(p, 'utf8'); } // node's utf8 = no BOM strip equivalent enough for our regex
 
@@ -66,20 +67,18 @@ function stripJsonc(text) {
 }
 
 // Returns the alias table, or null when there is none to read. Records like its
-// two siblings above: ts.tsconfig when the file could not be read or parsed, and
-// ts.alias when the config defers its paths to an `extends` chain this analyzer
-// does not follow — aliases then degrade to relative-only, which is a recorded
-// blind spot rather than an absence.
+// sibling above: ts.tsconfig when the file could not be read or parsed, and
+// ts.alias whenever the config carries an `extends` this analyzer does not
+// follow — the base config's paths are unread whether or not local ones exist,
+// so the record is keyed on the deferral, not on the local table being empty.
 function readTsconfig(file, subject, skips) {
   let obj;
   try { obj = JSON.parse(stripJsonc(readText(file))); }
   catch (e) { rec(skips, 'ts.tsconfig', subject, skipReason(e)); return null; }
+  if (obj?.extends != null) rec(skips, 'ts.alias', subject, 'EXTENDS');
   const co = obj?.compilerOptions;
   const hasPaths = co && typeof co === 'object' && co.paths && typeof co.paths === 'object';
-  if (!hasPaths) {
-    if (typeof obj?.extends === 'string') rec(skips, 'ts.alias', subject, 'EXTENDS');
-    return null;
-  }
+  if (!hasPaths) return null;
   const baseUrl = typeof co.baseUrl === 'string' ? co.baseUrl : null;
   const pairs = [];
   for (const [k, v] of Object.entries(co.paths)) {
@@ -105,7 +104,7 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
   const skips = [];
 
   // discover contexts + source roots from the tree
-  const contextDirs = safeDirNames(root, '.', skips)
+  const contextDirs = namesOf(safeReaddir(root, '.', skips), d => d.isDirectory())
     .filter(n => !n.startsWith('.') && !exclude.has(n))
     .sort();
   const srcRootOf = Object.fromEntries(contextDirs.map(c =>
@@ -148,7 +147,8 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
   const aliasOf = {};
   for (const c of contextDirs) {
     const list = [];
-    const tsfiles = safeFileNames(path.join(root, c), c, skips).filter(n => TSCONFIG_RE.test(n)).sort();
+    const tsfiles = namesOf(safeReaddir(path.join(root, c), c, skips), d => d.isFile())
+      .filter(n => TSCONFIG_RE.test(n)).sort();
     for (const tf of tsfiles) {
       const cfg = readTsconfig(path.join(root, c, tf), c + '/' + tf, skips);
       if (!cfg) continue;
@@ -210,10 +210,16 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
     }
   }
   // a relative specifier never reaches the third-party set, so an unresolved one
-  // vanishes entirely — recorded here rather than dropped.
+  // vanishes entirely — recorded here rather than dropped. One record per FILE:
+  // the subject and the reason are both invariant across the file's imports, so
+  // ten bad specifiers would push ten identical records for sortSkips to discard.
+  let unresolvedIn = null;
   function addExternal(f, spec) {
     if (spec.startsWith('.')) {
-      if (MODULE_SPEC_RE.test(spec)) rec(skips, 'ts.unresolved', f, 'NOTARGET');
+      if (MODULE_SPEC_RE.test(spec) && unresolvedIn !== f) {
+        unresolvedIn = f;
+        rec(skips, 'ts.unresolved', f, 'NOTARGET');
+      }
       return;
     }
     const pkg = pkgRoot(spec);

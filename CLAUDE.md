@@ -21,7 +21,7 @@ PE/IL via `System.Reflection.Metadata` for .NET assemblies. It is **not** a
 | **namespace** | Second level, labelled `{ctx} · {ns}`. **TS**: first path segment below the context's source root (`src/` if present, else the context dir); files in the source root → `(root)`. **.NET**: C# namespace; types with no namespace → `(root)`. |
 | **leaf** | Bottom level. **TS**: a file (`.ts`/`.tsx`, `.d.ts` included). **.NET**: a type. |
 | **edge** | A dependency from one leaf to another. **TS**: a value import. **.NET**: type→type, from structural metadata plus decoded method-body IL. |
-| **type-only cross-context edge** | TS-only: an `import type`/`export type` crossing a context boundary. Computed into `typeXctxEdges` and carried on the model; no renderer reads it and the summary has no such key. |
+| **type-only cross-context edge** | TS-only: an `import type`/`export type` crossing a context boundary. Computed into `typeXctxEdges` and carried on the model; no renderer reads it and the summary has no such key. It stays because removing it is a wire change across both analyzers for a distinction the matrix may yet want, and a test pins the current behaviour so it cannot drift unobserved meanwhile. |
 | **third-party** | A non-first-party reference. **TS**: the package root of any import the resolver could not resolve to a scanned file, `node:` builtins excluded — the classification is "unresolved", not "matches a manifest", since no `package.json` is ever read. **.NET**: any referenced external assembly. Sinks: never in cycle analysis. |
 | **SCC** | Strongly-connected component (Tarjan). A **cycle** at a level = an SCC of size > 1. Computed at file, namespace and context level. |
 | **triangular order** | Dependency-first sibling order (the alternative to alphabetical): dependencies pushed down/right, SCC members contiguous. |
@@ -166,9 +166,10 @@ slash command parses stdout and emits the ASCII namespace-level tables in chat.
 
 ## Invariants — preserve when editing
 
-- **Failure has a channel.** Every catch in an analyzer, and in ecosystem
-  detection, either records a `{stage, subject, reason}` skip on `raw.skips` or
-  throws. A catch that does neither is a defect. Detection counts because an
+- **Failure has a channel.** Every site that absorbs a failure — a `catch`, but
+  equally an `existsSync` that reads EACCES as absence — in an analyzer or in
+  ecosystem detection either records a `{stage, subject, reason}` skip on
+  `raw.skips` or throws. A site that does neither is a defect. Detection counts because an
   incomplete scan changes which analyzers run: a tree whose `.csproj` falls
   inside the 5000-directory budget and whose `.ts` falls past it would otherwise
   read as a clean .NET-only codebase. Skips are survivable — exit 0, the artifact is written,
