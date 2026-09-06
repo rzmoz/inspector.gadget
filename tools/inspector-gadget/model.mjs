@@ -10,10 +10,12 @@
 
 export const NS_SEP = ' · ';
 
-const CTX_PALETTE = [
+// exported so a gate can assert WHICH palette feeds which level and that the
+// index runs forward — a test carrying its own hex literals pins neither
+export const CTX_PALETTE = [
   '#eaf2ff', '#fdeef0', '#ecfbef', '#fff5d6', '#f3e8ff', '#e6fbfb', '#fef3e2', '#eef2f7'
 ];
-const NS_PALETTE = [
+export const NS_PALETTE = [
   '#cfe8ff', '#ffd1dc', '#d6f5d6', '#ffe9a6', '#e6c9e0', '#cfe8e0', '#ffdfba', '#d9d9d9',
   '#ffc9c9', '#cce5ff', '#ffe0b3', '#ffb3ba', '#c9e4ff', '#d6d6f5', '#f5d6d6', '#d6f5ec'
 ];
