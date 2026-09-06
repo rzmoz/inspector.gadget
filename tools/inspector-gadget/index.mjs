@@ -56,18 +56,27 @@ export function parseArgs(argv) {
 }
 
 // shallow + targeted: walk skipping node_modules/bin/obj/dist/build/.git etc.,
-// stop as soon as both flags are set or budget exhausted. `unreadable` and
-// `exhausted` are reported when detection finds NOTHING — a false "no ecosystem
-// here" caused by an ACL or by the budget must not read as a user error.
+// stop as soon as both flags are set or budget exhausted.
+//
+// An incomplete scan changes WHICH analyzers run, so it is a loss like any
+// other: it records into `skips`, which main() merges into the raw shape. The
+// counters additionally sharpen the "no ecosystem found" fatal, so a false
+// "nothing here" caused by an ACL or by the budget never reads as a user error.
 export function detect(root, budget = 5000) {
   const skip = new Set(['node_modules', 'bin', 'obj', 'dist', 'build', '.git', '.vs', '.idea']);
+  const skips = [];
+  const rel = (dir) => path.relative(root, dir).split(path.sep).join('/') || '.';
   let ts = false, dotnet = false, unreadable = 0, exhausted = false;
   function walk(dir) {
     if (ts && dotnet) return;
-    if (budget-- <= 0) { exhausted = true; return; }
+    if (budget-- <= 0) {
+      if (!exhausted) skips.push({ stage: 'detect.budget', subject: '(tree)', reason: 'EXHAUSTED' });
+      exhausted = true;
+      return;
+    }
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-    catch { unreadable++; return; }
+    catch (e) { unreadable++; skips.push({ stage: 'detect.readdir', subject: rel(dir), reason: (e && (e.code || e.name)) || 'Error' }); return; }
     for (const e of entries) {
       const name = e.name;
       if (e.isDirectory()) {
@@ -82,7 +91,9 @@ export function detect(root, budget = 5000) {
     }
   }
   walk(root);
-  return { ts, dotnet, unreadable, exhausted };
+  // a completed scan proves nothing was missed, so its records are dropped: both
+  // flags set means the walk returned early by design, not by loss
+  return { ts, dotnet, unreadable, exhausted, skips: ts && dotnet ? [] : skips };
 }
 
 function runDotnetHelper(root) {
@@ -174,6 +185,7 @@ function main(argv) {
   }
 
   const raw = mergeRaw(parts);
+  if (eco.skips?.length) raw.skips = sortSkips([...raw.skips, ...eco.skips]);
 
   // An empty model is not a result: rendering it writes three "acyclic ✓" lines
   // and a 20 KB matrix over an analysis that never happened, destroying the

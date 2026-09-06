@@ -174,10 +174,29 @@ test('detect reports an incomplete scan instead of claiming no ecosystem is pres
     const full = detect(root);
     assert.equal(full.ts, true);
     assert.equal(full.exhausted, false);
+    assert.deepEqual(full.skips, [], 'a scan that covered the tree records nothing');
     // budget 1 covers the root call only, so the .ts below it is never reached
     const starved = detect(root, 1);
     assert.equal(starved.ts, false);
     assert.equal(starved.exhausted, true, 'a budget-starved scan must not look like an empty tree');
+  });
+});
+
+test('an incomplete scan that still finds ONE ecosystem is recorded, not silently narrowed', () => {
+  // The .csproj sits inside the budget and the .ts past it: without a record the
+  // run is a confident .NET-only read of a mixed repo, exit 0, "skipped: none".
+  const spec = { 'svc/Svc.csproj': '<Project Sdk="Microsoft.NET.Sdk" />', 'zzz/z.ts': 'export const z = 1;\n' };
+  for (let i = 1; i <= 6; i++) spec[`aaa${i}/sub/.keep`] = '';
+  withFixture(spec, ({ root }) => {
+    let narrowed = null;
+    for (let b = 6; b <= 24 && !narrowed; b++) {
+      const r = detect(root, b);
+      if ((r.ts || r.dotnet) && (r.exhausted || r.unreadable)) narrowed = r;
+    }
+    assert.ok(narrowed, 'the fixture must produce a budget where detection succeeds on an incomplete scan');
+    assert.equal(narrowed.dotnet, true);
+    assert.equal(narrowed.ts, false, 'the TS half is past the budget');
+    assert.deepEqual(narrowed.skips, [{ stage: 'detect.budget', subject: '(tree)', reason: 'EXHAUSTED' }]);
   });
 });
 

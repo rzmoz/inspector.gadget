@@ -166,9 +166,12 @@ slash command parses stdout and emits the ASCII namespace-level tables in chat.
 
 ## Invariants — preserve when editing
 
-- **Failure has a channel.** Every catch in an analyzer either records a
-  `{stage, subject, reason}` skip on `raw.skips` or throws. A catch that does
-  neither is a defect. Skips are survivable — exit 0, the artifact is written,
+- **Failure has a channel.** Every catch in an analyzer, and in ecosystem
+  detection, either records a `{stage, subject, reason}` skip on `raw.skips` or
+  throws. A catch that does neither is a defect. Detection counts because an
+  incomplete scan changes which analyzers run: a tree whose `.csproj` falls
+  inside the 5000-directory budget and whose `.ts` falls past it would otherwise
+  read as a clean .NET-only codebase. Skips are survivable — exit 0, the artifact is written,
   and the count is stated on all three surfaces; zero files after merge is fatal
   — exit 2, no HTML, so the target's previous artifact survives. The clean-run
   line reads `skipped: none`, never "complete read": the channel vouches for
