@@ -65,17 +65,21 @@ function stripJsonc(text) {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
-// tsconfig, three-way: {paths} when compilerOptions.paths is present · {extendsOnly}
-// when the config defers its paths to an `extends` chain this analyzer does not
-// follow (aliases silently degrade to relative-only, so it is a recorded blind
-// spot, not an absence) · {error} when the file could not be read or parsed.
-function readTsconfig(file) {
+// Returns the alias table, or null when there is none to read. Records like its
+// two siblings above: ts.tsconfig when the file could not be read or parsed, and
+// ts.alias when the config defers its paths to an `extends` chain this analyzer
+// does not follow — aliases then degrade to relative-only, which is a recorded
+// blind spot rather than an absence.
+function readTsconfig(file, subject, skips) {
   let obj;
   try { obj = JSON.parse(stripJsonc(readText(file))); }
-  catch (e) { return { error: skipReason(e) }; }
+  catch (e) { rec(skips, 'ts.tsconfig', subject, skipReason(e)); return null; }
   const co = obj?.compilerOptions;
   const hasPaths = co && typeof co === 'object' && co.paths && typeof co.paths === 'object';
-  if (!hasPaths) return typeof obj?.extends === 'string' ? { extendsOnly: true } : {};
+  if (!hasPaths) {
+    if (typeof obj?.extends === 'string') rec(skips, 'ts.alias', subject, 'EXTENDS');
+    return null;
+  }
   const baseUrl = typeof co.baseUrl === 'string' ? co.baseUrl : null;
   const pairs = [];
   for (const [k, v] of Object.entries(co.paths)) {
@@ -146,11 +150,8 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
     const list = [];
     const tsfiles = safeFileNames(path.join(root, c), c, skips).filter(n => TSCONFIG_RE.test(n)).sort();
     for (const tf of tsfiles) {
-      const subject = c + '/' + tf;
-      const cfg = readTsconfig(path.join(root, c, tf));
-      if (cfg.error) { rec(skips, 'ts.tsconfig', subject, cfg.error); continue; }
-      if (cfg.extendsOnly) { rec(skips, 'ts.alias', subject, 'EXTENDS'); continue; }
-      if (!cfg.paths) continue;
+      const cfg = readTsconfig(path.join(root, c, tf), c + '/' + tf, skips);
+      if (!cfg) continue;
       const baseRel = cfg.baseUrl != null
         ? posix.normalize(posix.join(c, cfg.baseUrl.replace(/\\/g, '/')))
         : c;

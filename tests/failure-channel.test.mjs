@@ -9,16 +9,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { makeFixture, danglingSymlink, run, htmlPath, TWO_CONTEXTS, ASSETS, REPO } from './helpers/fixture.mjs';
+import { makeFixture, withFixture, danglingSymlink, run, htmlPath, TWO_CONTEXTS, ASSETS, REPO } from './helpers/fixture.mjs';
 import { assemble } from '../tools/inspector-gadget/model.mjs';
 import * as analyzeTs from '../tools/inspector-gadget/analyze-ts.mjs';
 import { render } from '../tools/inspector-gadget/render.mjs';
 import { detect, mergeRaw, parseArgs } from '../tools/inspector-gadget/index.mjs';
 
-const withFixture = (spec, fn) => {
-  const fx = makeFixture(spec);
-  try { return fn(fx); } finally { fx.cleanup(); }
-};
 const stageCounts = (r) => Object.fromEntries(r.json.skipped.byStage.map(x => [x.stage, x.count]));
 
 test('a clean run states completeness affirmatively on all three surfaces', () => {

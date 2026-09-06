@@ -38,6 +38,14 @@ export function danglingSymlink(root, rel) {
 }
 
 export function htmlPath(root) { return path.join(root, 'codebase-dsm.html'); }
+export function htmlOf(root) { return fs.readFileSync(htmlPath(root), 'utf8'); }
+
+// the fixture lifecycle lives here, once: cleanup hardening (Windows EBUSY, say)
+// then lands in one place rather than in whichever suite remembered it
+export function withFixture(spec, fn) {
+  const fx = makeFixture(spec);
+  try { return fn(fx); } finally { fx.cleanup(); }
+}
 
 export function run(root, ...args) {
   const res = spawnSync(process.execPath, [TOOL, root, ...args], { encoding: 'utf8' });

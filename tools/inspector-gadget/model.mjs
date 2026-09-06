@@ -34,6 +34,17 @@ export function sortSkips(list) {
     a.reason < b.reason ? -1 : a.reason > b.reason ? 1 : 0);
 }
 
+// Stage tally for the skip list, ranked desc by count then ordinal by stage —
+// the ONE digest shape the fatal message, the stderr report and the JSON summary
+// all render. Lives here rather than in render.mjs because index.mjs digests raw
+// skips before a Model exists.
+export function byStage(skips) {
+  const m = new Map();
+  for (const s of skips) m.set(s.stage, (m.get(s.stage) ?? 0) + 1);
+  return [...m].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([stage, count]) => ({ stage, count }));
+}
+export const skipDigest = (skips) => byStage(skips).map(x => `${x.stage} ${x.count}`).join(', ');
+
 // Distinct preserving first-seen order (≡ [...new Set(seq)]).
 export function distinctInOrder(seq) {
   const s = new Set(), o = [];

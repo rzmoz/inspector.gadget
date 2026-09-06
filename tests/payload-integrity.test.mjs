@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { makeFixture, run, htmlPath, payloadOf, TWO_CONTEXTS, ASSETS } from './helpers/fixture.mjs';
+import { withFixture, run, htmlPath, htmlOf, payloadOf, TWO_CONTEXTS, ASSETS } from './helpers/fixture.mjs';
 import { assemble } from '../tools/inspector-gadget/model.mjs';
 import * as analyzeTs from '../tools/inspector-gadget/analyze-ts.mjs';
 import { render } from '../tools/inspector-gadget/render.mjs';
@@ -18,14 +18,11 @@ import { render } from '../tools/inspector-gadget/render.mjs';
 const CLIENT = fs.readFileSync(path.join(ASSETS, 'dsm.client.js'), 'utf8');
 const TEMPLATE = fs.readFileSync(path.join(ASSETS, 'template.html'), 'utf8');
 
-const withRun = (spec, fn) => {
-  const fx = makeFixture(spec);
-  try {
-    const r = run(fx.root, '--ecosystem=ts');
-    assert.equal(r.status, 0, r.stderr);
-    return fn({ ...fx, r, payload: payloadOf(fx.root), html: fs.readFileSync(htmlPath(fx.root), 'utf8') });
-  } finally { fx.cleanup(); }
-};
+const withRun = (spec, fn) => withFixture(spec, (fx) => {
+  const r = run(fx.root, '--ecosystem=ts');
+  assert.equal(r.status, 0, r.stderr);
+  return fn({ ...fx, r, payload: payloadOf(fx.root), html: htmlOf(fx.root) });
+});
 
 // every `T.<ident>` the client reads, minus the local alias assignments
 const clientKeys = () => {
@@ -121,16 +118,15 @@ test('a partial read carries the COMPLETE skip list into the artifact, not the c
 });
 
 test('subjects and reasons reaching the HTML are escaped', () => {
-  const fx = makeFixture(TWO_CONTEXTS);
-  try {
+  withFixture(TWO_CONTEXTS, ({ root }) => {
     // Windows rejects < > " in a path, so a filesystem-built subject can only
     // ever carry &. render() is driven directly to cover the whole escaper.
-    const model = assemble(analyzeTs.build(fx.root));
+    const model = assemble(analyzeTs.build(root));
     model.skips = [{ stage: 'ts.readdir', subject: 'a<b>&"c/src', reason: 'E<X>&"Y' }];
-    render(model, { root: fx.root, title: 'esc', outputDsm: htmlPath(fx.root), assetsDir: ASSETS });
-    const html = fs.readFileSync(htmlPath(fx.root), 'utf8');
+    render(model, { root, title: 'esc', outputDsm: htmlPath(root), assetsDir: ASSETS });
+    const html = htmlOf(root);
     assert.ok(html.includes('a&lt;b&gt;&amp;&quot;c/src'), 'the subject must be entity-escaped');
     assert.ok(html.includes('E&lt;X&gt;&amp;&quot;Y'), 'and so must the reason');
     assert.equal(html.includes('a<b>&"c/src'), false, 'neither may appear raw');
-  } finally { fx.cleanup(); }
+  });
 });

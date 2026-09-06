@@ -40,19 +40,19 @@ internal static class Analyzer
     // absolute path would put the machine and the checkout location in the artifact.
     private static string Rel(string root, string p) => Path.GetRelativePath(root, p).Replace('\\', '/');
 
+    // One container: Sorted() applies a total ordinal sort, so insertion order
+    // carries nothing and a parallel list would only be a sync invariant to break.
+    // (model.mjs needs the Set-plus-array shape because a JS Set dedupes by
+    // identity; a C# value tuple does not have that constraint.)
     private sealed class SkipLog
     {
-        private readonly HashSet<(string, string, string)> _seen = new();
-        private readonly List<SkipDto> _items = new();
-        public void Add(string stage, string subject, string reason)
-        {
-            if (_seen.Add((stage, subject, reason)))
-                _items.Add(new SkipDto { Stage = stage, Subject = subject, Reason = reason });
-        }
-        public List<SkipDto> Sorted() => _items
+        private readonly HashSet<(string Stage, string Subject, string Reason)> _seen = new();
+        public void Add(string stage, string subject, string reason) => _seen.Add((stage, subject, reason));
+        public List<SkipDto> Sorted() => _seen
             .OrderBy(s => s.Stage, StringComparer.Ordinal)
             .ThenBy(s => s.Subject, StringComparer.Ordinal)
             .ThenBy(s => s.Reason, StringComparer.Ordinal)
+            .Select(s => new SkipDto { Stage = s.Stage, Subject = s.Subject, Reason = s.Reason })
             .ToList();
     }
 
@@ -283,11 +283,10 @@ internal static class Analyzer
     }
 
     private static void CollectTypeRefs(MetadataReader r, PEReader pe, string ctx,
-        TypeDefinitionHandle th, List<TypeId> ids, HashSet<TypeId> seen, in Sink sink)
+        TypeDefinitionHandle th, List<TypeId> ids, HashSet<TypeId> seen, Sink sink)
     {
         var td = r.GetTypeDefinition(th);
-        var sk = sink;
-        void Add(EntityHandle e) { if (!e.IsNil) Resolve(r, ctx, e, ids, seen, sk); }
+        void Add(EntityHandle e) { if (!e.IsNil) Resolve(r, ctx, e, ids, seen, sink); }
 
         if (!td.BaseType.IsNil) Add(td.BaseType);
         foreach (var ih in td.GetInterfaceImplementations()) Add(r.GetInterfaceImplementation(ih).Interface);
@@ -330,7 +329,7 @@ internal static class Analyzer
     }
 
     private static void AddGenericConstraints(MetadataReader r, string ctx,
-        GenericParameterHandleCollection gps, List<TypeId> ids, HashSet<TypeId> seen, in Sink sink)
+        GenericParameterHandleCollection gps, List<TypeId> ids, HashSet<TypeId> seen, Sink sink)
     {
         foreach (var gph in gps)
         {
@@ -344,7 +343,7 @@ internal static class Analyzer
     }
 
     private static void DecodeInto(List<TypeId> ids, HashSet<TypeId> seen,
-        MetadataReader r, string ctx, Action<RefCollector> decode, in Sink sink)
+        MetadataReader r, string ctx, Action<RefCollector> decode, Sink sink)
     {
         var col = new RefCollector();
         try { decode(col); }
@@ -353,7 +352,7 @@ internal static class Analyzer
     }
 
     private static void Resolve(MetadataReader r, string ctx, EntityHandle h,
-        List<TypeId> ids, HashSet<TypeId> seen, in Sink sink)
+        List<TypeId> ids, HashSet<TypeId> seen, Sink sink)
     {
         if (h.IsNil) return;
         switch (h.Kind)
@@ -431,7 +430,7 @@ internal static class Analyzer
     }
 
     private static void WalkIL(byte[] il, MetadataReader r, string ctx,
-        List<TypeId> ids, HashSet<TypeId> seen, in Sink sink)
+        List<TypeId> ids, HashSet<TypeId> seen, Sink sink)
     {
         int i = 0, n = il.Length;
         while (i < n)

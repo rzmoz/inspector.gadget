@@ -22,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import * as analyzeTs from './analyze-ts.mjs';
-import { assemble, sortSkips } from './model.mjs';
+import { assemble, sortSkips, skipDigest } from './model.mjs';
 import { render } from './render.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,7 +62,8 @@ export function parseArgs(argv) {
 // other: it records into `skips`, which main() merges into the raw shape. The
 // counters additionally sharpen the "no ecosystem found" fatal, so a false
 // "nothing here" caused by an ACL or by the budget never reads as a user error.
-export function detect(root, budget = 5000) {
+export const SCAN_BUDGET = 5000;
+export function detect(root, budget = SCAN_BUDGET) {
   const skip = new Set(['node_modules', 'bin', 'obj', 'dist', 'build', '.git', '.vs', '.idea']);
   const skips = [];
   const rel = (dir) => path.relative(root, dir).split(path.sep).join('/') || '.';
@@ -158,10 +159,9 @@ function main(argv) {
   if (want === 'auto') {
     eco = detect(root);
     if (!eco.ts && !eco.dotnet) {
-      const why = [
-        eco.unreadable > 0 ? `${eco.unreadable} director${eco.unreadable === 1 ? 'y was' : 'ies were'} unreadable` : null,
-        eco.exhausted ? 'the 5000-directory scan budget was exhausted before the tree was covered' : null,
-      ].filter(Boolean);
+      const why = [];
+      if (eco.unreadable) why.push(`${eco.unreadable} director${eco.unreadable === 1 ? 'y was' : 'ies were'} unreadable`);
+      if (eco.exhausted) why.push(`the ${SCAN_BUDGET}-directory scan budget was exhausted before the tree was covered`);
       process.stderr.write(`error: no .csproj/.sln and no .ts/tsconfig found under ${root}\n` +
         (why.length ? `       detection was incomplete: ${why.join('; ')}.\n` : '') +
         `       use --ecosystem to force one if your layout is unusual.\n`); return 1;
@@ -208,11 +208,6 @@ function main(argv) {
   return 0;
 }
 
-function skipDigest(skips) {
-  const by = new Map();
-  for (const s of skips) by.set(s.stage, (by.get(s.stage) ?? 0) + 1);
-  return [...by].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([s, n]) => `${s} ${n}`).join(', ');
-}
 
 // importable for tests; only the direct invocation runs the CLI
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

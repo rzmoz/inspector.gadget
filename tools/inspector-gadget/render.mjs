@@ -11,14 +11,20 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { NS_SEP } from './model.mjs';
+import { NS_SEP, byStage, skipDigest } from './model.mjs';
 
 const wire = {
   ctxId: (ctx) => 'c:' + ctx,
   nsId:  (ns)  => 'n:' + ns,
   fileId: (i)  => 'f:' + i,
 };
-const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// mirrors esc() in assets/dsm.client.js: assets/ is inlined verbatim and cannot
+// import from here, and the escape set is fixed by HTML rather than by this code
+const HTML_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => HTML_ESC[c]);
+// stderr and the JSON carry a headline plus this many records; the HTML carries
+// the complete list, so the cap is a reading convenience, never a data loss
+const SAMPLE_CAP = 20;
 const fileLabel = (f) => { const p = f.split('/'); return p.length <= 2 ? f : p.slice(-2).join('/'); };
 const nsLeaf = (ns) => { const p = ns.split(NS_SEP); return p[p.length - 1]; };
 
@@ -247,6 +253,12 @@ function fill(tpl, vals) {
   return out;
 }
 
+// the stdout shape .claude/commands/inspector-gadget.rr.md step 4 documents
+function skippedSummary(skips) {
+  const sample = skips.slice(0, SAMPLE_CAP);
+  return { total: skips.length, byStage: byStage(skips), sample, omitted: skips.length - sample.length };
+}
+
 // The artifact outlives the run and gets opened a week later with no stderr
 // anywhere, so it carries the COMPLETE list, not a sample.
 function skipsHtml(skips) {
@@ -257,13 +269,6 @@ function skipsHtml(skips) {
     + `<table><thead><tr><th>stage</th><th>subject</th><th>reason</th></tr></thead><tbody>${rows}</tbody></table></details>`;
 }
 
-// stage counts, desc by count then ordinal by stage — the one digest shape all
-// three surfaces render.
-function byStage(skips) {
-  const m = new Map();
-  for (const s of skips) m.set(s.stage, (m.get(s.stage) ?? 0) + 1);
-  return [...m].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([stage, count]) => ({ stage, count }));
-}
 
 function assembleHtml(title, payload, assetsDir, skips) {
   const css = fs.readFileSync(path.join(assetsDir, 'template.css'), 'utf8');
@@ -347,12 +352,7 @@ function buildSummary(model, payload, title, outPath, htmlLen) {
     },
     crossCtxAsymmetries: asym,
     thirdParty: tp,
-    skipped: {
-      total: model.skips.length,
-      byStage: byStage(model.skips),
-      sample: model.skips.slice(0, 20),
-      omitted: Math.max(0, model.skips.length - 20),
-    },
+    skipped: skippedSummary(model.skips),
   };
 }
 
@@ -362,10 +362,9 @@ function printHumanReport(model, outPath, htmlLen) {
   out(`files: ${model.files.length} | edges: ${model.edges.length} | namespaces: ${model.allGroups.length} | contexts: ${model.allCtx.length}`);
   if (model.skips.length === 0) out('skipped: none');
   else {
-    const digest = byStage(model.skips).map(x => `${x.stage} ${x.count}`).join(', ');
-    out(`skipped: ${model.skips.length} subject(s) (${digest}) — PARTIAL READ`);
-    for (const s of model.skips.slice(0, 20)) out(`  • ${s.stage}  ${s.subject}  [${s.reason}]`);
-    if (model.skips.length > 20) out(`  … and ${model.skips.length - 20} more (full list in the HTML)`);
+    out(`skipped: ${model.skips.length} subject(s) (${skipDigest(model.skips)}) — PARTIAL READ`);
+    for (const s of model.skips.slice(0, SAMPLE_CAP)) out(`  • ${s.stage}  ${s.subject}  [${s.reason}]`);
+    if (model.skips.length > SAMPLE_CAP) out(`  … and ${model.skips.length - SAMPLE_CAP} more (full list in the HTML)`);
   }
   const c = (scc) => scc.comps.filter(x => x.length > 1);
   const ctxCycles = c(model.ctxScc), nsCycles = c(model.groupScc), fileCycles = c(model.fileScc);
