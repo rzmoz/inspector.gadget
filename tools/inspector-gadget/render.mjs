@@ -4,6 +4,10 @@
 // WIRE CONTRACT with assets/dsm.client.js (no compile-time link — change both
 // sides together): node ids "c:"/"n:"/"f:"; ns labels "{ctx}{NS_SEP}{name}";
 // payload.edges = [fromFileIdx,toFileIdx]; payload keys = wireKey() below.
+//
+// Skips ride the MODEL, never the payload: dsm.client.js rewrites #meta.innerHTML
+// on every render, so a payload-borne banner is erased on first interaction.
+// ${SKIPS} is a static template fill outside #meta, and the client is untouched.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,6 +18,7 @@ const wire = {
   nsId:  (ns)  => 'n:' + ns,
   fileId: (i)  => 'f:' + i,
 };
+const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fileLabel = (f) => { const p = f.split('/'); return p.length <= 2 ? f : p.slice(-2).join('/'); };
 const nsLeaf = (ns) => { const p = ns.split(NS_SEP); return p[p.length - 1]; };
 
@@ -208,15 +213,19 @@ function buildPayload(model) {
     thirdPartyCtxId: tpCtxId,
     fileCount: files.length,
     edgeCount: model.edges.length,
-    tpCount: model.tpPackages.length,
     // matrix-only build: no graph payload (graph tab removed)
     _meta: { ctxOrder, nsOrderAll, fileOrderAll, nsByCtx, filesByNs }, // for summary
   };
 }
 
-// single-pass: inserted values contain their own `${...}`, so never re-scan them
+// single-pass: inserted values contain their own `${...}`, so never re-scan them.
+// The scan is over the TEMPLATE only — ${CLIENT} inlines a JS file full of
+// template literals, so scanning the OUTPUT would fire on every run.
+// An unknown token in the template, or a value nothing consumes, is a template/
+// renderer mismatch and throws rather than shipping a ${...} into the artifact.
 function fill(tpl, vals) {
   let out = '', i = 0;
+  const used = new Set();
   while (i < tpl.length) {
     const p = tpl.indexOf('${', i);
     if (p < 0) { out += tpl.slice(i); break; }
@@ -224,13 +233,39 @@ function fill(tpl, vals) {
     const e = tpl.indexOf('}', p + 2);
     if (e < 0) { out += tpl.slice(p); break; }
     const tok = tpl.slice(p, e + 1);
-    out += Object.prototype.hasOwnProperty.call(vals, tok) ? vals[tok] : tok;
+    if (!Object.prototype.hasOwnProperty.call(vals, tok)) {
+      throw new Error(`template.html carries an unknown placeholder ${tok} — render.mjs supplies none`);
+    }
+    used.add(tok);
+    out += vals[tok];
     i = e + 1;
+  }
+  const unused = Object.keys(vals).filter(k => !used.has(k));
+  if (unused.length > 0) {
+    throw new Error(`render.mjs supplies ${unused.join(', ')} and template.html consumes none of them`);
   }
   return out;
 }
 
-function assembleHtml(title, payload, assetsDir) {
+// The artifact outlives the run and gets opened a week later with no stderr
+// anywhere, so it carries the COMPLETE list, not a sample.
+function skipsHtml(skips) {
+  if (skips.length === 0) return '<div class="skips ok">skipped: none</div>';
+  const rows = skips.map(s =>
+    `<tr><td>${escHtml(s.stage)}</td><td>${escHtml(s.subject)}</td><td>${escHtml(s.reason)}</td></tr>`).join('');
+  return `<details class="skips bad"><summary>PARTIAL READ — ${skips.length} subject(s) skipped</summary>`
+    + `<table><thead><tr><th>stage</th><th>subject</th><th>reason</th></tr></thead><tbody>${rows}</tbody></table></details>`;
+}
+
+// stage counts, desc by count then ordinal by stage — the one digest shape all
+// three surfaces render.
+function byStage(skips) {
+  const m = new Map();
+  for (const s of skips) m.set(s.stage, (m.get(s.stage) ?? 0) + 1);
+  return [...m].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([stage, count]) => ({ stage, count }));
+}
+
+function assembleHtml(title, payload, assetsDir, skips) {
   const css = fs.readFileSync(path.join(assetsDir, 'template.css'), 'utf8');
   const template = fs.readFileSync(path.join(assetsDir, 'template.html'), 'utf8');
   const client = fs.readFileSync(path.join(assetsDir, 'dsm.client.js'), 'utf8');
@@ -242,6 +277,7 @@ function assembleHtml(title, payload, assetsDir) {
     '${CSS}': css,
     '${JSON.stringify(payload)}': json,
     '${CLIENT}': client,
+    '${SKIPS}': skipsHtml(skips),
   });
 }
 
@@ -311,6 +347,12 @@ function buildSummary(model, payload, title, outPath, htmlLen) {
     },
     crossCtxAsymmetries: asym,
     thirdParty: tp,
+    skipped: {
+      total: model.skips.length,
+      byStage: byStage(model.skips),
+      sample: model.skips.slice(0, 20),
+      omitted: Math.max(0, model.skips.length - 20),
+    },
   };
 }
 
@@ -318,6 +360,13 @@ function buildSummary(model, payload, title, outPath, htmlLen) {
 function printHumanReport(model, outPath, htmlLen) {
   const out = (s) => process.stderr.write(s + '\n');
   out(`files: ${model.files.length} | edges: ${model.edges.length} | namespaces: ${model.allGroups.length} | contexts: ${model.allCtx.length}`);
+  if (model.skips.length === 0) out('skipped: none');
+  else {
+    const digest = byStage(model.skips).map(x => `${x.stage} ${x.count}`).join(', ');
+    out(`skipped: ${model.skips.length} subject(s) (${digest}) — PARTIAL READ`);
+    for (const s of model.skips.slice(0, 20)) out(`  • ${s.stage}  ${s.subject}  [${s.reason}]`);
+    if (model.skips.length > 20) out(`  … and ${model.skips.length - 20} more (full list in the HTML)`);
+  }
   const c = (scc) => scc.comps.filter(x => x.length > 1);
   const ctxCycles = c(model.ctxScc), nsCycles = c(model.groupScc), fileCycles = c(model.fileScc);
   out(`\ncontext-level: ${ctxCycles.length > 0 ? 'CYCLE(S) — architecture violation!' : 'acyclic ✓'}`);
@@ -332,7 +381,7 @@ function printHumanReport(model, outPath, htmlLen) {
 
 export function render(model, { root, title, outputDsm, assetsDir }) {
   const payload = buildPayload(model);
-  const html = assembleHtml(title, payload, assetsDir);
+  const html = assembleHtml(title, payload, assetsDir, model.skips);
   fs.writeFileSync(outputDsm, html, 'utf8');
   printHumanReport(model, outputDsm, html.length);
   const summary = buildSummary(model, payload, title, outputDsm, html.length);

@@ -9,7 +9,12 @@ using InspectorGadget.Dotnet;
 // Stack-bound DFS hazard (IL walk + type-ref recursion) → run on a 256 MB worker.
 //
 // WIRE: stdout JSON keys = { files, fileCtx, fileNs, edges, tpEdges, tpPkgs,
-// typeXctxEdges } — same shape analyze-ts.mjs produces; mergeRaw() concatenates.
+// typeXctxEdges, skips } — same shape analyze-ts.mjs produces; mergeRaw()
+// concatenates. skips = [{stage,subject,reason}], one per distinct subject lost.
+//
+// PROCESS BOUNDARY: skips -> exit 0 with JSON on stdout (a partial read is still
+// a read). A fatal -> exit 1, an "error:" line on stderr, and NO JSON, so the
+// orchestrator can never mistake a failed run for an empty codebase.
 
 try { Console.OutputEncoding = new UTF8Encoding(false); } catch { /* redirected */ }
 

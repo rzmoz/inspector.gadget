@@ -6,6 +6,13 @@
 // CLI: inspector-gadget <code-root> [--ecosystem=ts|dotnet|auto] [-h]
 //      Aliases: --code-root <dir> / --code-root=<dir> (positional preferred).
 //
+// EXIT: 0 = artifact written (skips may be > 0 — a partial read is still a read)
+//       1 = usage or precondition (bad args, missing/not-a-directory root, no
+//           ecosystem detected) — nothing was analyzed
+//       2 = the analysis produced nothing trustworthy (an analyzer failed, or
+//           zero files after merge). No HTML is written, so the target keeps
+//           whatever artifact a previous good run left there.
+//
 // stdout: compact JSON summary (consumed by the /inspector-gadget slash command).
 // stderr: human-readable report.
 
@@ -15,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import * as analyzeTs from './analyze-ts.mjs';
-import { assemble } from './model.mjs';
+import { assemble, sortSkips } from './model.mjs';
 import { render } from './render.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,7 +39,7 @@ const USAGE =
   '\n' +
   'Writes <code-root>/codebase-dsm.html and prints a JSON summary to stdout.';
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   let help = false, ecosystem = 'auto', root = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -49,14 +56,18 @@ function parseArgs(argv) {
 }
 
 // shallow + targeted: walk skipping node_modules/bin/obj/dist/build/.git etc.,
-// stop as soon as both flags are set or budget exhausted.
-function detect(root) {
+// stop as soon as both flags are set or budget exhausted. `unreadable` and
+// `exhausted` are reported when detection finds NOTHING — a false "no ecosystem
+// here" caused by an ACL or by the budget must not read as a user error.
+export function detect(root, budget = 5000) {
   const skip = new Set(['node_modules', 'bin', 'obj', 'dist', 'build', '.git', '.vs', '.idea']);
-  let ts = false, dotnet = false, budget = 5000;
+  let ts = false, dotnet = false, unreadable = 0, exhausted = false;
   function walk(dir) {
-    if (budget-- <= 0 || (ts && dotnet)) return;
+    if (ts && dotnet) return;
+    if (budget-- <= 0) { exhausted = true; return; }
     let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { unreadable++; return; }
     for (const e of entries) {
       const name = e.name;
       if (e.isDirectory()) {
@@ -71,7 +82,7 @@ function detect(root) {
     }
   }
   walk(root);
-  return { ts, dotnet };
+  return { ts, dotnet, unreadable, exhausted };
 }
 
 function runDotnetHelper(root) {
@@ -84,23 +95,35 @@ function runDotnetHelper(root) {
     process.stderr.write(res.stderr || '');
     throw new Error(`dotnet helper exited ${res.status}`);
   }
-  // helper prints build banners to stderr; stdout is the raw JSON only.
+  // helper prints build banners to stderr; stdout is the raw JSON only. Those
+  // banners are NOT forwarded on success — they vary per build and the report
+  // must diff cleanly across runs. The helper's own losses arrive as raw.skips.
   try { return JSON.parse(res.stdout); }
   catch (e) { throw new Error(`could not parse dotnet helper output: ${e.message}`); }
 }
 
-function mergeRaw(parts) {
-  const out = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [] };
-  for (const p of parts) {
-    out.files.push(...p.files);
-    Object.assign(out.fileCtx, p.fileCtx);
-    Object.assign(out.fileNs, p.fileNs);
-    out.edges.push(...p.edges);
-    out.tpEdges.push(...p.tpEdges);
-    out.tpPkgs.push(...p.tpPkgs);
-    out.typeXctxEdges.push(...p.typeXctxEdges);
+// Every raw shape merges the same way, single analyzer or two, so the skip list
+// is deduped and ordinal-sorted on exactly one path.
+export function mergeRaw(parts) {
+  const out = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [], skips: [] };
+  for (const { label, raw } of parts) {
+    out.files.push(...raw.files);
+    Object.assign(out.fileCtx, raw.fileCtx);
+    Object.assign(out.fileNs, raw.fileNs);
+    out.edges.push(...raw.edges);
+    out.tpEdges.push(...raw.tpEdges);
+    out.tpPkgs.push(...raw.tpPkgs);
+    out.typeXctxEdges.push(...raw.typeXctxEdges);
+    // an absent skips key means "this analyzer cannot say what it lost", which is
+    // itself a loss — recorded, never defaulted away to an empty list.
+    if (Array.isArray(raw.skips)) out.skips.push(...raw.skips);
+    else out.skips.push({ stage: 'analyzer.contract', subject: label, reason: 'NOSKIPS' });
+    if (raw.files.length === 0 && parts.length > 1) {
+      out.skips.push({ stage: 'analyzer.empty', subject: label, reason: 'NOFILES' });
+    }
   }
   out.files.sort(); // deterministic merged order
+  out.skips = sortSkips(out.skips);
   return out;
 }
 
@@ -124,7 +147,12 @@ function main(argv) {
   if (want === 'auto') {
     eco = detect(root);
     if (!eco.ts && !eco.dotnet) {
+      const why = [
+        eco.unreadable > 0 ? `${eco.unreadable} director${eco.unreadable === 1 ? 'y was' : 'ies were'} unreadable` : null,
+        eco.exhausted ? 'the 5000-directory scan budget was exhausted before the tree was covered' : null,
+      ].filter(Boolean);
       process.stderr.write(`error: no .csproj/.sln and no .ts/tsconfig found under ${root}\n` +
+        (why.length ? `       detection was incomplete: ${why.join('; ')}.\n` : '') +
         `       use --ecosystem to force one if your layout is unusual.\n`); return 1;
     }
   } else {
@@ -132,16 +160,34 @@ function main(argv) {
   }
 
   const parts = [];
-  if (eco.ts) {
-    process.stderr.write(`[ts] analyzing ${root}\n`);
-    parts.push(analyzeTs.build(root));
-  }
-  if (eco.dotnet) {
-    process.stderr.write(`[dotnet] analyzing ${root} (via dotnet run helper)\n`);
-    parts.push(runDotnetHelper(root));
+  try {
+    if (eco.ts) {
+      process.stderr.write(`[ts] analyzing ${root}\n`);
+      parts.push({ label: 'ts', raw: analyzeTs.build(root) });
+    }
+    if (eco.dotnet) {
+      process.stderr.write(`[dotnet] analyzing ${root} (via dotnet run helper)\n`);
+      parts.push({ label: 'dotnet', raw: runDotnetHelper(root) });
+    }
+  } catch (e) {
+    process.stderr.write(`error: ${e.message}\n`); return 2;
   }
 
-  const raw = parts.length === 1 ? parts[0] : mergeRaw(parts);
+  const raw = mergeRaw(parts);
+
+  // An empty model is not a result: rendering it writes three "acyclic ✓" lines
+  // and a 20 KB matrix over an analysis that never happened, destroying the
+  // target's previous artifact on the way. Refuse before assemble().
+  if (raw.files.length === 0) {
+    const ecos = [eco.ts ? 'ts' : null, eco.dotnet ? 'dotnet' : null].filter(Boolean).join('+');
+    process.stderr.write(
+      `error: analysed 0 files under ${root} (ecosystem=${ecos})\n` +
+      `       contexts come from SUBDIRECTORIES of the code root, so a flat project\n` +
+      `       whose sources sit at the root has nothing to analyze — point at the parent.\n` +
+      (raw.skips.length ? `       ${raw.skips.length} subject(s) were skipped: ${skipDigest(raw.skips)}\n` : ''));
+    return 2;
+  }
+
   const model = assemble(raw);
 
   const title = path.basename(root) || root;
@@ -150,5 +196,13 @@ function main(argv) {
   return 0;
 }
 
-const code = main(process.argv.slice(2));
-process.exit(code);
+function skipDigest(skips) {
+  const by = new Map();
+  for (const s of skips) by.set(s.stage, (by.get(s.stage) ?? 0) + 1);
+  return [...by].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([s, n]) => `${s} ${n}`).join(', ');
+}
+
+// importable for tests; only the direct invocation runs the CLI
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exit(main(process.argv.slice(2)));
+}

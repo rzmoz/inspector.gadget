@@ -4,6 +4,13 @@
   header{padding:12px 18px 4px}
   h1{font-size:16px;margin:0 0 4px;font-weight:650}
   .meta{color:#64748b;font-size:12px}
+  .skips{font-size:12px;margin-top:4px}
+  .skips.ok{color:#16a34a}
+  .skips.bad{color:#b45309}
+  .skips summary{cursor:pointer;font-weight:600}
+  .skips table{border-collapse:collapse;margin:6px 0 2px;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;max-height:240px;overflow:auto;display:block}
+  .skips th{text-align:left;color:#64748b;font-weight:600;padding:1px 12px 1px 0}
+  .skips td{padding:1px 12px 1px 0;white-space:nowrap;color:#78350f}
   .controls{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:8px 18px}
   .seg{display:inline-flex;border:1px solid #cbd5e1;border-radius:7px;overflow:hidden}
   .seg button{border:0;background:#fff;padding:5px 11px;font:inherit;cursor:pointer;border-right:1px solid #e2e8f0;color:#334155}

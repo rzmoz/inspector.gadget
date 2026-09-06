@@ -1,12 +1,18 @@
 // Node/TypeScript analyzer — port of Analyzer/NodeAnalyzer.cs.
 // Walks .ts/.tsx under each context's source root, resolves relative + tsconfig-
 // path imports → file edges, collects non-relative imports as third-party, returns
-// the RAW shape (files/fileCtx/fileNs/edges/tpEdges/tpPkgs/typeXctxEdges) the
+// the RAW shape (files/fileCtx/fileNs/edges/tpEdges/tpPkgs/typeXctxEdges/skips) the
 // shared model.mjs consumes. Faithful to the C# regex set + tsconfig handling.
+//
+// FAILURE CHANNEL: nothing here is absorbed silently. Every read that can fail
+// pushes a {stage,subject,reason} record onto `skips`; the orchestrator decides
+// whether the surviving analysis is still a result. A catch that neither records
+// nor throws is a defect in this file.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import * as posix from './posix-path.mjs';
+import { sortSkips } from './model.mjs';
 
 export const DEFAULT_EXCLUDES = ['node_modules', 'dist', 'build'];
 const NS_SEP = ' · '; // " · " — keep in sync with model.mjs / dsm.client.js wire
@@ -16,14 +22,24 @@ const SIDE_RE = /\bimport\s+['"]([^'"]+)['"]/g;
 const DYN_RE = /(?:\bimport\b|\brequire)\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 const TYPE_ONLY_RE = /^\s+type\b/;
 const TSCONFIG_RE = /^tsconfig.*\.json$/;
+// a relative specifier worth reporting when it resolves to nothing: bare, or a
+// module extension. `./styles.css` / `./logo.svg` are assets, not lost modules.
+const MODULE_SPEC_RE = /(^|\/)[^/.]+$|\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
 
-function safeDirNames(dir) {
+// reason is a STABLE CLASSIFIER, never e.message: messages carry absolute paths
+// and errno prose, and the artifact must diff cleanly across runs and machines.
+const skipReason = (e) => (e && (e.code || e.name)) || 'Error';
+// subjects are the root-relative POSIX strings the walk already carries; an
+// absolute path would embed the machine and the checkout location in the artifact.
+const rec = (skips, stage, subject, reason) => { skips.push({ stage, subject, reason }); };
+
+function safeDirNames(dir, subject, skips) {
   try { return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); }
-  catch { return []; }
+  catch (e) { rec(skips, 'ts.readdir', subject, skipReason(e)); return []; }
 }
-function safeFileNames(dir) {
+function safeFileNames(dir, subject, skips) {
   try { return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name); }
-  catch { return []; }
+  catch (e) { rec(skips, 'ts.readdir', subject, skipReason(e)); return []; }
 }
 function toNative(posixPath) { return posixPath.split('/').join(path.sep); }
 function readText(p) { return fs.readFileSync(p, 'utf8'); } // node's utf8 = no BOM strip equivalent enough for our regex
@@ -49,22 +65,25 @@ function stripJsonc(text) {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
-// tsconfig: null if compilerOptions.paths absent. First array entry per alias.
+// tsconfig, three-way: {paths} when compilerOptions.paths is present · {extendsOnly}
+// when the config defers its paths to an `extends` chain this analyzer does not
+// follow (aliases silently degrade to relative-only, so it is a recorded blind
+// spot, not an absence) · {error} when the file could not be read or parsed.
 function readTsconfig(file) {
-  try {
-    const raw = readText(file);
-    const obj = JSON.parse(stripJsonc(raw));
-    const co = obj?.compilerOptions;
-    if (!co || typeof co !== 'object' || !co.paths || typeof co.paths !== 'object') return null;
-    const baseUrl = typeof co.baseUrl === 'string' ? co.baseUrl : null;
-    const pairs = [];
-    for (const [k, v] of Object.entries(co.paths)) {
-      if (!Array.isArray(v) || v.length === 0) continue;
-      const first = typeof v[0] === 'string' ? v[0] : JSON.stringify(v[0]);
-      pairs.push([k, first]);
-    }
-    return { baseUrl, paths: pairs };
-  } catch { return null; }
+  let obj;
+  try { obj = JSON.parse(stripJsonc(readText(file))); }
+  catch (e) { return { error: skipReason(e) }; }
+  const co = obj?.compilerOptions;
+  const hasPaths = co && typeof co === 'object' && co.paths && typeof co.paths === 'object';
+  if (!hasPaths) return typeof obj?.extends === 'string' ? { extendsOnly: true } : {};
+  const baseUrl = typeof co.baseUrl === 'string' ? co.baseUrl : null;
+  const pairs = [];
+  for (const [k, v] of Object.entries(co.paths)) {
+    if (!Array.isArray(v) || v.length === 0) continue;
+    const first = typeof v[0] === 'string' ? v[0] : JSON.stringify(v[0]);
+    pairs.push([k, first]);
+  }
+  return { baseUrl, paths: pairs };
 }
 
 function replaceFirst(s, ch, rep) {
@@ -79,9 +98,10 @@ function pkgRoot(spec) {
 
 export function build(root, excludes = DEFAULT_EXCLUDES) {
   const exclude = new Set(excludes);
+  const skips = [];
 
   // discover contexts + source roots from the tree
-  const contextDirs = safeDirNames(root)
+  const contextDirs = safeDirNames(root, '.', skips)
     .filter(n => !n.startsWith('.') && !exclude.has(n))
     .sort();
   const srcRootOf = Object.fromEntries(contextDirs.map(c =>
@@ -94,7 +114,8 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
 
   function walk(nativeDir, posixDir, ctx, srcRoot) {
     let entries;
-    try { entries = fs.readdirSync(nativeDir, { withFileTypes: true }); } catch { return; }
+    try { entries = fs.readdirSync(nativeDir, { withFileTypes: true }); }
+    catch (e) { rec(skips, 'ts.readdir', posixDir, skipReason(e)); return; }
     for (const e of entries) {
       const name = e.name;
       const full = path.join(nativeDir, name);
@@ -123,10 +144,13 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
   const aliasOf = {};
   for (const c of contextDirs) {
     const list = [];
-    const tsfiles = safeFileNames(path.join(root, c)).filter(n => TSCONFIG_RE.test(n)).sort();
+    const tsfiles = safeFileNames(path.join(root, c), c, skips).filter(n => TSCONFIG_RE.test(n)).sort();
     for (const tf of tsfiles) {
+      const subject = c + '/' + tf;
       const cfg = readTsconfig(path.join(root, c, tf));
-      if (!cfg) continue;
+      if (cfg.error) { rec(skips, 'ts.tsconfig', subject, cfg.error); continue; }
+      if (cfg.extendsOnly) { rec(skips, 'ts.alias', subject, 'EXTENDS'); continue; }
+      if (!cfg.paths) continue;
       const baseRel = cfg.baseUrl != null
         ? posix.normalize(posix.join(c, cfg.baseUrl.replace(/\\/g, '/')))
         : c;
@@ -184,8 +208,13 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
       if (!seen.has(k)) { seen.add(k); edges.push([f, tgt]); }
     }
   }
+  // a relative specifier never reaches the third-party set, so an unresolved one
+  // vanishes entirely — recorded here rather than dropped.
   function addExternal(f, spec) {
-    if (spec.startsWith('.')) return;
+    if (spec.startsWith('.')) {
+      if (MODULE_SPEC_RE.test(spec)) rec(skips, 'ts.unresolved', f, 'NOTARGET');
+      return;
+    }
     const pkg = pkgRoot(spec);
     if (!pkg) return;
     tpPkgs.add(pkg);
@@ -195,7 +224,8 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
 
   for (const f of files) {
     let src;
-    try { src = readText(path.join(root, toNative(f))); } catch { continue; }
+    try { src = readText(path.join(root, toNative(f))); }
+    catch (e) { rec(skips, 'ts.readfile', f, skipReason(e)); continue; }
 
     let m;
     FROM_RE.lastIndex = 0;
@@ -229,5 +259,6 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
     tpEdges,
     tpPkgs: [...tpPkgs],
     typeXctxEdges,
+    skips: sortSkips(skips),
   };
 }

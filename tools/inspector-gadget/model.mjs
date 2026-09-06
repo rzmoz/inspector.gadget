@@ -4,7 +4,7 @@
 // Input shape (from any analyzer, possibly merged):
 //   { files: string[], fileCtx: {file:ctx}, fileNs: {file:ns},
 //     edges: [from,to][], tpEdges: [from,pkg][], tpPkgs: string[],
-//     typeXctxEdges: [from,to][] }
+//     typeXctxEdges: [from,to][], skips: [{stage,subject,reason}] }
 // Output: a finalized Model with palette colours, per-level Tarjan SCCs,
 // cluster lists, ns→files map — directly consumed by render.mjs.
 
@@ -17,6 +17,22 @@ const NS_PALETTE = [
   '#cfe8ff', '#ffd1dc', '#d6f5d6', '#ffe9a6', '#e6c9e0', '#cfe8e0', '#ffdfba', '#d9d9d9',
   '#ffc9c9', '#cce5ff', '#ffe0b3', '#ffb3ba', '#c9e4ff', '#d6d6f5', '#f5d6d6', '#d6f5ec'
 ];
+
+// Skip list normalizer: dedupe on the (stage,subject,reason) triple, then
+// ordinal sort by it. readdir order is not stable, so an unsorted list would
+// diff dirtily across runs with identical content. Ordinal, never localeCompare
+// — display order is render's problem, data order must not depend on ICU.
+export function sortSkips(list) {
+  const seen = new Set(), out = [];
+  for (const s of list ?? []) {
+    const k = s.stage + '\0' + s.subject + '\0' + s.reason;
+    if (!seen.has(k)) { seen.add(k); out.push(s); }
+  }
+  return out.sort((a, b) =>
+    a.stage < b.stage ? -1 : a.stage > b.stage ? 1 :
+    a.subject < b.subject ? -1 : a.subject > b.subject ? 1 :
+    a.reason < b.reason ? -1 : a.reason > b.reason ? 1 : 0);
+}
 
 // Distinct preserving first-seen order (≡ [...new Set(seq)]).
 export function distinctInOrder(seq) {
@@ -91,6 +107,7 @@ function buildClusterAdj(clusters, edges, of) {
 
 export function assemble(raw) {
   const { files, fileCtx, fileNs, edges, tpEdges, tpPkgs, typeXctxEdges } = raw;
+  const skips = sortSkips(Array.isArray(raw.skips) ? raw.skips : []);
   const ctxOf = (f) => fileCtx[f] ?? 'other';
   const grpOf = (f) => fileNs[f] ?? 'other';
 
@@ -137,6 +154,7 @@ export function assemble(raw) {
     tpPackages: [...new Set(tpPkgs)].sort(),
     tpEdges,
     typeXctxEdges,
+    skips,
     ctxOf, grpOf,
     ctxColour: (n) => ctxColourMap[n] ?? '#ffffff',
     colourOf: (g) => nsColourMap[g] ?? '#ffffff',
