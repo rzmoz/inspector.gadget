@@ -49,15 +49,18 @@ tools/inspector-gadget/
     analyze-dotnet.csproj  net10.0, no PackAsTool
   model.mjs            shared finalize: Tarjan SCC (iterative), palette, cluster adj, sortSkips
   render.mjs           matrix-only payload + template fill → codebase-dsm.html + JSON summary
-  posix-path.mjs       Node `path.posix` port — keeps TS resolution stable across OSes
   assets/
     template.html        page skeleton (matrix-only — no tabs, no graph pane)
     template.css         page CSS
     dsm.client.js        matrix renderer (vanilla DOM; reads global DATA)
 tests/
-  helpers/fixture.mjs  temp-tree fixture builder + CLI driver
+  helpers/fixture.mjs  temp-tree fixture builder + CLI driver + the raw wire shape
   failure-channel.test.mjs    the skip channel and the exit ladder, end to end
   payload-integrity.test.mjs  the render → dsm.client.js wire contract
+  resolve.test.mjs            the TS resolution rules, on the raw analyzer shape
+  orchestrator.test.mjs       mergeRaw, incl. a real dual-ecosystem run
+  determinism.test.mjs        ordering, and that no ICU comparator reaches the artifact
+  ports.test.mjs              Tarjan against a reachability oracle; palette wiring
 package.json        `npm test` only — private, no dependencies, no `main`/`bin`
 install.bat         mirrors only the slash-command .md into ~/.claude/commands/
 LICENSE             MIT
@@ -73,8 +76,10 @@ slash command (in chat) runs **`node C:\Projects\inspector-gadget\tools\inspecto
 into one model; `--ecosystem=ts|dotnet|auto` overrides →
 analyzer(s) produce the **raw shape**
 `{files, fileCtx, fileNs, edges, tpEdges, tpPkgs, typeXctxEdges, skips}` →
-`index.mjs#mergeRaw` concatenates, dedupes and ordinal-sorts the skip lists, and
-**refuses with exit 2 if zero files survived** →
+`index.mjs#mergeRaw` concatenates, dedupes and ordinal-sorts the skip lists,
+keeps the **first** claim on any leaf two analyzers both name and records the
+rest as `analyzer.collision`, and **refuses with exit 2 if zero files
+survived** →
 `model.mjs#assemble(raw)` finalizes (palette colours, three Tarjan SCCs at
 file/namespace/context, cluster lists, ns→files, `model.skips`) →
 `render.mjs#render(model, cfg)` builds payload, fills template with inlined CSS
@@ -145,7 +150,7 @@ slash command parses stdout and emits the ASCII namespace-level tables in chat.
   `dotnet run` from `index.mjs` triggers this automatically; cached after.
 - **The verification floor for any change here** is `npm test` green plus, for a
   change touching the .NET half, the smoke test below. `npm test` runs
-  `node --test "tests/**/*.test.mjs"` — 28 cases, no dependencies. Fixtures are
+  `node --test "tests/**/*.test.mjs"`, no dependencies. Fixtures are
   built under `os.tmpdir()` at run time; a fixture tree checked into the repo
   would become a context in the tool's own self-scan, and two of the fixtures (a
   plain file named `src`, a dangling symlink) do not survive a `git clone` on
@@ -186,10 +191,18 @@ slash command parses stdout and emits the ASCII namespace-level tables in chat.
   manifest to check it against, so a workspace-internal alias can appear as an
   external package.
 - **Determinism.** Output (HTML + stdout JSON + stderr report) must diff cleanly
-  across runs. Sort node/edge/context lists. JS default sort / `<` mirrors
-  ordinal; `localeCompare` is used for the triangular/alpha ordering on both
-  the C# helper side and the node side. Insertion-order is preserved where the
-  C# original used it (analyzers, cluster adjacency). The skip list is deduped
+  across runs, **and across machines**. Every order that reaches those three
+  surfaces is **ordinal**: JS default sort / `<` on the node side,
+  `StringComparer.Ordinal` on the C# side, and `model.mjs#ord` wherever a
+  comparator has to be passed (`render.mjs`'s triangular ordering and the
+  summary's tie-breaks). `localeCompare` depends on the host ICU build *and* on
+  the default locale, so it is banned from every `.mjs` under
+  `tools/inspector-gadget/` and `determinism.test.mjs` scans for it, along with
+  `Intl.` and `toLocale`. The one exception is `assets/dsm.client.js`, whose
+  alpha toggle sorts in the **viewer's own browser** for the human reading it —
+  deliberately locale-aware, and outside the byte-stability claim because the
+  inlined source text is identical either way. Insertion-order is preserved
+  where the C# original used it (analyzers, cluster adjacency). The skip list is deduped
   on the `(stage, subject, reason)` triple and **ordinal**-sorted by it before
   it leaves an analyzer — `readdir` order is not stable, and display order is
   the renderer's problem, never the data's. `reason` is never an error message

@@ -28,23 +28,3 @@ Binds every row in this file.
 | **The gate is `npm test`** | no row is closed on reading alone; a row that changes behaviour lands with a case that was red before it |
 
 **Row schema.** `ID · Target · Item · Evidence · Status`.
-
-## B1 — the regression pins the first gate deliberately left out (2026-09-06)
-
-**Purpose.** The failure channel landed with two suites: `tests/failure-channel.test.mjs` pins the
-behaviour that wave changed, `tests/payload-integrity.test.mjs` pins the wire contract it widened.
-Everything below is **green today** and unpinned — regression pins for logic that has no gate, not
-bug hunts. Each was measured during that wave and carved out of it deliberately, because the wave's
-gate was for the behaviour it changed.
-
-**Goals.** Each row lands as its own `node:test` file under `tests/`, zero dependencies, fixtures
-built under `os.tmpdir()` by `tests/helpers/fixture.mjs`. `npm test` green. A row that finds a real
-defect on its first run fixes it in the same commit and says so, the way `tpCount` was found and
-removed by `payload-integrity` on its first run.
-
-| ID | Target | Item | Evidence | Status |
-|---|---|---|---|---|
-| B1.1 | inspector-gadget | `tests/resolve.test.mjs` — the TS resolution rules, asserted on the raw shape rather than the rendered output so a failure names the rule that broke: relative sibling and parent, `.js`→`.ts` rewrite, `index.ts`/`index.tsx`, tsconfig `paths` wildcard and exact, `baseUrl`, JSONC comments and trailing commas, whole-statement `import type` excluded from cycles, cross-context type-only into `typeXctxEdges`, third-party package-root extraction including `@scope/name` and the `node:` exclusion. Highest-churn logic in the repo and the one place a wrong answer looks like a clean architecture rather than an error | `tools/inspector-gadget/analyze-ts.mjs` `resolve()` `resolveFile()` `readTsconfig()` `pkgRoot()` | `todo` |
-| B1.2 | inspector-gadget | `tests/orchestrator.test.mjs` — `mergeRaw` beyond the three cases `failure-channel` already covers: key collisions between two analyzers' `fileCtx`/`fileNs` (silently last-wins today), duplicate entries in `files` (never deduped), and a real dual-ecosystem run over one target. That merge path is exercised only by mixed repos, which is the configuration nobody runs by accident, and its failure mode is silent index corruption | `tools/inspector-gadget/index.mjs` `mergeRaw` | `todo` |
-| B1.3 | inspector-gadget | `tests/determinism.test.mjs` — a dedicated double-run over a larger fixture than `failure-channel`'s, plus the one real cross-machine exposure: `triOrder` and `contextMajorOrder` sort with `localeCompare` while the rest of the pipeline is ordinal, so two Node builds with different ICU data can emit different orderings from identical input. Decide at pickup whether the fix is a test or an ordinal comparator | `tools/inspector-gadget/render.mjs` `triOrder` `contextMajorOrder` `lc` | `todo` |
-| B1.4 | inspector-gadget | `tests/ports.test.mjs` — the two hand-written ports and the palette, all proven correct today: `posix-path.mjs` differentially against `node:path.posix` (a free oracle, since the file's whole claim is to be a faithful port), Tarjan SCC correctness and determinism, palette assignment by sorted name. A permanently-green differential is also the evidence that would license deleting `posix-path.mjs` and importing `node:path.posix` directly — weigh that at pickup, since it touches the stdlib-only invariant and `CLAUDE.md`'s stated reason for the port | `tools/inspector-gadget/posix-path.mjs`, `tools/inspector-gadget/model.mjs` `tarjan` | `todo` |
