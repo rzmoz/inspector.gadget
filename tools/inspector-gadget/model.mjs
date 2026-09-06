@@ -18,20 +18,22 @@ const NS_PALETTE = [
   '#ffc9c9', '#cce5ff', '#ffe0b3', '#ffb3ba', '#c9e4ff', '#d6d6f5', '#f5d6d6', '#d6f5ec'
 ];
 
+// The one comparator every ordering in this tool routes through. localeCompare
+// depends on the host ICU build AND on the default locale, so identical input
+// on two machines emits different bytes; every order here reaches the artifact
+// or the stdout JSON, and is therefore data.
+export const ord = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
 // Skip list normalizer: dedupe on the (stage,subject,reason) triple, then
 // ordinal sort by it. readdir order is not stable, so an unsorted list would
-// diff dirtily across runs with identical content. Ordinal, never localeCompare
-// — display order is render's problem, data order must not depend on ICU.
+// diff dirtily across runs with identical content.
 export function sortSkips(list) {
   const seen = new Set(), out = [];
   for (const s of list ?? []) {
     const k = s.stage + '\0' + s.subject + '\0' + s.reason;
     if (!seen.has(k)) { seen.add(k); out.push(s); }
   }
-  return out.sort((a, b) =>
-    a.stage < b.stage ? -1 : a.stage > b.stage ? 1 :
-    a.subject < b.subject ? -1 : a.subject > b.subject ? 1 :
-    a.reason < b.reason ? -1 : a.reason > b.reason ? 1 : 0);
+  return out.sort((a, b) => ord(a.stage, b.stage) || ord(a.subject, b.subject) || ord(a.reason, b.reason));
 }
 
 // Stage tally for the skip list, ranked desc by count then ordinal by stage —
@@ -41,7 +43,7 @@ export function sortSkips(list) {
 export function byStage(skips) {
   const m = new Map();
   for (const s of skips) m.set(s.stage, (m.get(s.stage) ?? 0) + 1);
-  return [...m].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([stage, count]) => ({ stage, count }));
+  return [...m].sort((a, b) => b[1] - a[1] || ord(a[0], b[0])).map(([stage, count]) => ({ stage, count }));
 }
 export const skipDigest = (skips) => byStage(skips).map(x => `${x.stage} ${x.count}`).join(', ');
 

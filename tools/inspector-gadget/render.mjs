@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { NS_SEP, byStage, skipDigest } from './model.mjs';
+import { NS_SEP, byStage, skipDigest, ord } from './model.mjs';
 
 const wire = {
   ctxId: (ctx) => 'c:' + ctx,
@@ -60,22 +60,23 @@ function triOrder(nodes, nodeOf, scc, labelFor, ctxFor, edges) {
     if (compMin[c] === null || label[i] < compMin[c]) compMin[c] = label[i];
   }
 
-  // localeCompare mirror — matches dsm.client.js's alpha sort
-  const lc = (a, b) => (compMin[a] ?? '').localeCompare(compMin[b] ?? '');
+  // ordinal, like every other order in this tool: this one lands in the
+  // artifact's node order, so it must not vary with the host's ICU data
+  const byCompMin = (a, b) => ord(compMin[a] ?? '', compMin[b] ?? '');
 
   const visited = new Set();
   const post = [];
   function dfs(c) {
     visited.add(c);
-    for (const d of [...cadj[c].items].sort(lc)) if (!visited.has(d)) dfs(d);
+    for (const d of [...cadj[c].items].sort(byCompMin)) if (!visited.has(d)) dfs(d);
     post.push(c);
   }
-  for (const c of [...Array(ncomp).keys()].sort(lc)) if (!visited.has(c)) dfs(c);
+  for (const c of [...Array(ncomp).keys()].sort(byCompMin)) if (!visited.has(c)) dfs(c);
 
   const members = Array.from({ length: ncomp }, () => []);
   for (let i = 0; i < N; i++) members[compOf(i)].push(i);
-  const labelLc = (a, b) => label[a].localeCompare(label[b]);
-  for (let c = 0; c < ncomp; c++) members[c].sort(labelLc);
+  const byLabel = (a, b) => ord(label[a], label[b]);
+  for (let c = 0; c < ncomp; c++) members[c].sort(byLabel);
 
   const triGlobal = [];
   for (const c of post) for (const m of members[c]) triGlobal.push(m);
@@ -314,7 +315,7 @@ function buildSummary(model, payload, title, outPath, htmlLen) {
     const [a, b] = k.split('>');
     if (!ctxPair.has(b + '>' + a)) asym.push({ from: a, to: b, count });
   }
-  asym.sort((x, y) => y.count - x.count || x.from.localeCompare(y.from));
+  asym.sort((x, y) => y.count - x.count || ord(x.from, y.from));
 
   // 3p consumer counts (per package, distinct first-party namespaces)
   const tpConsumers = new Map();
@@ -323,7 +324,7 @@ function buildSummary(model, payload, title, outPath, htmlLen) {
     tpConsumers.get(pkg).add(grpOf(from));
   }
   const tp = [...tpConsumers].map(([pkg, set]) => ({ package: pkg, consumers: set.size }))
-    .sort((a, b) => b.consumers - a.consumers || a.package.localeCompare(b.package));
+    .sort((a, b) => b.consumers - a.consumers || ord(a.package, b.package));
 
   const cycComps = (scc) => scc.comps.filter(c => c.length > 1);
   const fileCycles = cycComps(model.fileScc);

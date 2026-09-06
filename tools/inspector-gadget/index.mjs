@@ -129,13 +129,37 @@ export function mergeRaw(parts) {
       skips.push({ stage: 'analyzer.empty', subject: label, reason: 'NOFILES' });
     }
   }
-  const out = parts.length === 1
-    ? { ...parts[0].raw }
-    : { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [] };
-  for (const { raw } of parts.length === 1 ? [] : parts) {
-    out.files.push(...raw.files);
-    Object.assign(out.fileCtx, raw.fileCtx);
-    Object.assign(out.fileNs, raw.fileNs);
+  // The raw shape belongs to its analyzer, which may still read it; sorting in
+  // place would reorder the caller's array under it.
+  if (parts.length === 1) {
+    const out = { ...parts[0].raw, files: [...parts[0].raw.files] };
+    out.files.sort();
+    out.skips = sortSkips(skips);
+    return out;
+  }
+
+  const out = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [] };
+  // A leaf claimed twice is index corruption, not a merge: the later claim
+  // overwrites the earlier one's context and namespace and the row is counted
+  // twice in every per-file tally. The first claim stands, the rest is a loss
+  // like any other — one record per leaf, whichever analyzers collided.
+  const claimed = new Set();
+  const collided = new Set();
+  for (const { raw } of parts) {
+    const prior = new Set(claimed);
+    for (const f of raw.files) {
+      if (claimed.has(f)) {
+        if (!collided.has(f)) {
+          collided.add(f);
+          skips.push({ stage: 'analyzer.collision', subject: f, reason: 'DUPKEY' });
+        }
+        continue;
+      }
+      claimed.add(f);
+      out.files.push(f);
+    }
+    for (const [k, v] of Object.entries(raw.fileCtx)) if (!prior.has(k)) out.fileCtx[k] = v;
+    for (const [k, v] of Object.entries(raw.fileNs)) if (!prior.has(k)) out.fileNs[k] = v;
     out.edges.push(...raw.edges);
     out.tpEdges.push(...raw.tpEdges);
     out.tpPkgs.push(...raw.tpPkgs);

@@ -11,7 +11,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import * as posix from './posix-path.mjs';
 import { sortSkips } from './model.mjs';
 
 export const DEFAULT_EXCLUDES = ['node_modules', 'dist', 'build'];
@@ -153,10 +152,10 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
       const cfg = readTsconfig(path.join(root, c, tf), c + '/' + tf, skips);
       if (!cfg) continue;
       const baseRel = cfg.baseUrl != null
-        ? posix.normalize(posix.join(c, cfg.baseUrl.replace(/\\/g, '/')))
+        ? path.posix.normalize(path.posix.join(c, cfg.baseUrl.replace(/\\/g, '/')))
         : c;
       for (const [key, first] of cfg.paths) {
-        const target = posix.normalize(posix.join(baseRel, first.replace(/\\/g, '/')));
+        const target = path.posix.normalize(path.posix.join(baseRel, first.replace(/\\/g, '/')));
         if (key.endsWith('/*')) list.push({ wild: true, key: key.slice(0, -2), target });
         else list.push({ wild: false, key, target });
       }
@@ -176,18 +175,18 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
   }
   function resolve(fromFile, spec) {
     if (spec.startsWith('.')) {
-      return resolveFile(posix.normalize(posix.join(posix.dirname(fromFile), spec)));
+      return resolveFile(path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)));
     }
     const aliases = aliasOf[fileCtx[fromFile]];
     if (!aliases) return null;
     for (const a of aliases) {
       if (a.wild) {
         if (spec.startsWith(a.key + '/')) {
-          const hit = resolveFile(posix.normalize(replaceFirst(a.target, '*', spec.slice(a.key.length + 1))));
+          const hit = resolveFile(path.posix.normalize(replaceFirst(a.target, '*', spec.slice(a.key.length + 1))));
           if (hit) return hit;
         }
       } else if (spec === a.key) {
-        const hit = resolveFile(posix.normalize(a.target));
+        const hit = resolveFile(path.posix.normalize(a.target));
         if (hit) return hit;
       }
     }
