@@ -3,7 +3,7 @@ description: Structural read of a codebase — interactive DSM matrix HTML + den
 argument-hint: [code-root]
 ---
 
-You are running `/inspector-gadget`. Arguments: `$ARGUMENTS`.
+You are running `/inspector-gadget.rr`. Arguments: `$ARGUMENTS`.
 
 ## Procedure
 
@@ -30,8 +30,16 @@ You are running `/inspector-gadget`. Arguments: `$ARGUMENTS`.
 
 3. **Run the analyzer.** Invoke:
    `node <tool>/index.mjs <target>`
-   Capture stdout (compact JSON summary) and stderr (human-readable report +
-   warnings). If exit code ≠ 0, print stderr verbatim and stop.
+   Capture stdout (compact JSON summary) and stderr (human-readable report).
+   Exit codes:
+   - **0** — the artifact was written. `skipped.total` may still be > 0; a
+     partial read is a real read and you report it, you do not discard it.
+   - **1** — usage or precondition (bad args, target not a directory, no
+     ecosystem detected). Nothing was analyzed.
+   - **2** — the analysis produced nothing trustworthy (an analyzer failed, or
+     zero files after merge). No HTML was written.
+
+   If exit code ≠ 0, print stderr verbatim and stop.
 
 4. **Parse stdout** as JSON. Shape:
    - `title`, `output` (absolute HTML path), `htmlSizeKB`
@@ -45,6 +53,10 @@ You are running `/inspector-gadget`. Arguments: `$ARGUMENTS`.
      matrix-only, not emitted here
    - `crossCtxAsymmetries: [{from, to, count}]` — A→B with no B→A
    - `thirdParty: [{package, consumers}]` — sorted by consumer count desc
+   - `skipped: {total, byStage: [{stage, count}], sample: [{stage, subject,
+     reason}], omitted}` — **always present**, `total: 0` on a clean run. One
+     record is one distinct subject the analyzer lost or degraded, not one
+     incident. `sample` is capped at 20; the complete list is in the HTML.
 
 5. **Emit in chat — namespace level only, no per-file rows.** Use ASCII tables
    (Unicode box-drawing acceptable). Column widths sized to fit. Suggested
@@ -53,6 +65,10 @@ You are running `/inspector-gadget`. Arguments: `$ARGUMENTS`.
    - **Header line.** `inspector-gadget · {title} · {output}` then one line
      `files {n} | edges {n} | ns {n} | ctx {n} | 3p {n}` then if any cycles:
      `cycles: ctx {n}, ns {n}, file {n}` else `cycles: none ✓`.
+   - **Read-completeness line — unconditional, never skipped as "empty".**
+     `skipped: none` when `skipped.total` is 0, else
+     `⚠ PARTIAL READ — {total} subject(s) skipped ({stage} {n}, …)`. Silence is
+     not the signal for a complete read; the line is always printed.
    - **Contexts** table. Columns: `ctx | ns | files | in→ | out→ | internal`.
      Rows in the order given.
    - **Namespaces** table. Columns: `ctx · ns | files | in→ | out→ | internal`.
@@ -65,6 +81,9 @@ You are running `/inspector-gadget`. Arguments: `$ARGUMENTS`.
      Skip if empty.
    - **Third-party concentration** table. Columns: `package | consumers (ns)`.
      Top 15. Skip if empty.
+   - **Skipped** table — only when `skipped.total` > 0. Columns:
+     `stage | subject | reason`, from `skipped.sample`. If `omitted` > 0, add
+     `… and {omitted} more (full list in the HTML)`.
    - **Closing line:** `→ matrix viewer: file://{output}` so the user can click
      it open.
 
@@ -81,6 +100,9 @@ You are running `/inspector-gadget`. Arguments: `$ARGUMENTS`.
   forced one.
 - First .NET run will spend a few seconds building the helper project — that's
   `dotnet run`, not "the tool is wrong". Subsequent runs are cached.
+- A **partial read** is the normal state on an unbuilt solution or a monorepo
+  whose `tsconfig` aliases live in an `extends`ed base config. Report it; do
+  not treat it as a tool failure and do not re-run.
 - The HTML viewer is the deep artifact (file-level matrix, expand/collapse,
-  direct/+indirect, third-party toggle). The in-chat tables are the
-  namespace-level overview.
+  direct/+indirect, third-party toggle, the complete skip list). The in-chat
+  tables are the namespace-level overview.
