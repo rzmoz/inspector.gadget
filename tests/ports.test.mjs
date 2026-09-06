@@ -1,27 +1,20 @@
 // The hand-written Tarjan and the palette assignment — model.mjs's two ungated
 // pieces.
 //
-// Every cycle claim the tool prints, on all three levels, is one function's
-// output, and both of its failure modes are silent: a wrong merge reports
-// "acyclic ✓" over a real cycle, a wrong split reports a cycle that is not
-// there, and the emission ORDER reaches output bytes through cycComps
-// (render.mjs), which filters comps in that order into the stdout JSON's sccs
-// arrays and the stderr report's cycle lines. The matrix is NOT one of them:
-// triOrder builds its own component DAG and orders it by byCompMin, so node
-// layout is invariant under a permutation of comps ids. Hand-picked graphs
-// cannot reach any of this; the
-// oracle here is brute-force mutual reachability over seeded random digraphs, a
-// free supply of shapes nobody would think to draw. The palette half pins the
-// two facts a colour bug hides behind: the key is the SORTED name, so file
-// arrival order cannot move a colour, and the two palettes wrap at their own
-// lengths rather than a shared one. Both are moduli, and a modulus cannot see a
-// cross-wire that keeps the length or an index reflected end to end, so the
-// assignment is compared against the exported CTX_PALETTE/NS_PALETTE themselves:
-// recolouring stays free, the wiring does not.
+// Both Tarjan failure modes are silent: a wrong merge reports "acyclic ✓" over a
+// real cycle, a wrong split reports a cycle that is not there. Its emission ORDER
+// reaches output bytes too, through cycComps, into the stdout JSON's sccs arrays
+// and the report's cycle lines — but NOT into the matrix, whose layout triOrder
+// derives independently and which is invariant under a permutation of comps ids.
+// Hand-picked graphs cannot reach any of that; the oracle here is brute-force
+// mutual reachability over seeded random digraphs, a free supply of shapes
+// nobody would think to draw. The palette cases carry their own argument at the
+// point of use.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { EMPTY_RAW } from './helpers/fixture.mjs';
 import {
   tarjan, distinctInOrder, assemble, NS_SEP, CTX_PALETTE, NS_PALETTE,
 } from '../tools/inspector-gadget/model.mjs';
@@ -81,16 +74,16 @@ test('the components partition the node set, and size() reads the component that
     for (const v of nodes) {
       const ci = scc.id.get(v);
       assert.ok(scc.comps[ci]?.includes(v), `id sends ${v} to a component that does not hold it — ${where(g)}`);
-      // comps[ci] would re-derive size() from the two values size() reads; the
-      // partition above makes the holder unique, so search comps for it instead
+      // the partition above makes the holder unique, so comps can be searched
+      // for it without going through id — two routes to one component, not one
       const holder = scc.comps.find(c => c.includes(v));
       assert.ok(holder, `no component in comps holds ${v} — ${where(g)}`);
-      assert.equal(scc.size(v), holder.length,
-        `size() must be the length of the component that actually holds ${v}, read out of comps without going through id — ${where(g)}`);
+      assert.equal(holder.length, scc.comps[ci].length,
+        `the component id sends ${v} to is not the one that holds it — ${where(g)}`);
     }
     if (scc.comps.some(c => c.length > 1)) withMulti++;
   }
-  assert.ok(withMulti > 30, `the table must produce multi-node components or size() is only ever 1 (got ${withMulti})`);
+  assert.ok(withMulti > 30, `the table must produce multi-node components or every component is trivially size 1 (got ${withMulti})`);
 });
 
 test('two nodes share a component IFF each reaches the other — brute-force oracle over seeded random digraphs', () => {
@@ -127,7 +120,7 @@ test('a component is emitted only after everything it reaches: a cross-component
         if (ca === cb) continue;
         crossEdges++;
         assert.ok(cb < ca,
-          `${a}->${b} crosses ${ca}->${cb}: the target component must already be emitted, and render.mjs's cycComps (render.mjs:329) filters comps in this order straight into the stdout JSON's sccs arrays and the report's cycle lines — ${where(g)}`);
+          `${a}->${b} crosses ${ca}->${cb}: the target component must already be emitted, and render.mjs's cycComps filters comps in this order straight into the stdout JSON's sccs arrays and the report's cycle lines — ${where(g)}`);
       }
     }
   }
@@ -160,9 +153,10 @@ test('a self-loop is a size-1 component, so the cycle filter does not count it; 
   const nodes = ['iso', 'self', 'a', 'b'];
   const adj = new Map([['iso', []], ['self', ['self']], ['a', ['b']], ['b', ['a']]]);
   const scc = tarjan(nodes, adj);
-  assert.equal(scc.size('iso'), 1);
-  assert.equal(scc.size('self'), 1, 'one node, even though it reaches itself');
-  assert.equal(scc.size('a'), 2);
+  const sizeOf = (n) => scc.comps[scc.id.get(n)].length;
+  assert.equal(sizeOf('iso'), 1);
+  assert.equal(sizeOf('self'), 1, 'one node, even though it reaches itself');
+  assert.equal(sizeOf('a'), 2);
   const cycles = scc.comps.filter(c => c.length > 1);
   assert.equal(cycles.length, 1,
     'render.mjs and the JSON summary both define a cycle as comps.length > 1, so a file importing itself is reported acyclic — this pins that fact, not an intent');
@@ -170,10 +164,10 @@ test('a self-loop is a size-1 component, so the cycle filter does not count it; 
 });
 
 const rawOf = (entries) => ({
+  ...EMPTY_RAW,
   files: entries.map(e => e.file),
   fileCtx: Object.fromEntries(entries.map(e => [e.file, e.ctx])),
   fileNs: Object.fromEntries(entries.map(e => [e.file, e.ctx + NS_SEP + e.ns])),
-  edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [], skips: [],
 });
 
 test('a colour is keyed on the SORTED name, so the order files arrive in cannot move it', () => {

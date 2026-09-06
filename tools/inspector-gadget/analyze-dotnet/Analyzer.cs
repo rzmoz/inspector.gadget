@@ -133,7 +133,11 @@ internal static class Analyzer
                     string typeLocal = ns.Length > 0 && full.StartsWith(ns + ".", StringComparison.Ordinal)
                         ? full[(ns.Length + 1)..] : full;
                     string leaf = ctx + "/" + nsLabel + "/" + typeLocal;
-                    if (typeOf.ContainsKey(leaf)) continue;
+                    // two types minting one leaf is a lost type, not a merge: the
+                    // second is dropped and every reference to it lands on the first.
+                    // The leaf is ctx/ns/typeLocal, so nested types whose declaring
+                    // chains differ can collide on it. Recorded like any other loss.
+                    if (typeOf.ContainsKey(leaf)) { log.Add("dotnet.duplicate-type", leaf, "DUPKEY"); continue; }
                     files.Add(leaf);
                     fileCtx[leaf] = ctx;
                     fileNs[leaf] = ctx + NsSep + nsLabel;

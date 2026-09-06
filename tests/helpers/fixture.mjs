@@ -77,3 +77,8 @@ export const TWO_CONTEXTS = {
   'app/tsconfig.json': '{"compilerOptions":{"paths":{"@lib/*":["../lib/src/*"]}}}',
   'lib/src/util/index.ts': 'export const helper = 1;\nexport type T = number;\n',
 };
+
+// The analyzer wire contract, one home. Three suites hand-wrote these eight keys
+// under three names; a key added to analyze-ts.mjs or to RawDto then had to be
+// found in three literals, one of which seeds the very case that guards the drift.
+export const EMPTY_RAW = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [], skips: [] };

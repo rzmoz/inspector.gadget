@@ -15,10 +15,19 @@ import assert from 'node:assert/strict';
 
 import { withFixture } from './helpers/fixture.mjs';
 import { build } from '../tools/inspector-gadget/analyze-ts.mjs';
+import { NS_SEP as NS } from '../tools/inspector-gadget/model.mjs';
 
-const analyze = (spec) => withFixture(spec, ({ root }) => build(root));
+// the guard rides here rather than in every case: a tree that analysed to nothing
+// satisfies every emptiness claim below without measuring anything
+const analyze = (spec) => withFixture(spec, ({ root }) => {
+  const raw = build(root);
+  assert.ok(raw.files.length > 0, 'the fixture analysed to no files, so nothing below measures anything');
+  return raw;
+});
 const arrows = (pairs) => pairs.map(([a, b]) => `${a} -> ${b}`).sort();
-const NS = ' · '; // the namespace wire separator; model.mjs and the client split on it
+// the claim "this rule cost nothing" — its premise, that the tree analysed to
+// something, is enforced for every case by analyze() above
+const noLosses = (raw, why) => assert.deepEqual(raw.skips, [], why);
 
 const ALIAS_TSCONFIG = '{"compilerOptions":{"paths":{"@lib/*":["../lib/src/*"]}}}';
 
@@ -35,8 +44,7 @@ test('a relative sibling and a relative parent both resolve to file edges', () =
     'app/src/core/a.ts -> app/src/core/sib.ts',
     'app/src/core/a.ts -> app/src/shared/p.ts',
   ], './x and ../x are normalized against the importer directory, not against the source root');
-  assert.deepEqual(raw.skips, [],
-    'a relative specifier that resolves must not ALSO reach the failure channel; ts.unresolved recording itself is pinned in failure-channel.test.mjs');
+  noLosses(raw, 'a relative specifier that resolves must not ALSO reach the failure channel; ts.unresolved recording itself is pinned in failure-channel.test.mjs');
 });
 
 test("a '.js' specifier resolves to the .ts and .tsx file the author actually wrote", () => {
@@ -52,8 +60,7 @@ test("a '.js' specifier resolves to the .ts and .tsx file the author actually wr
     'app/src/a.ts -> app/src/x.ts',
     'app/src/a.ts -> app/src/y.tsx',
   ], 'NodeNext sources import their own siblings as .js; without the noJs rewrite every such edge is lost');
-  assert.ok(raw.files.length > 0, 'a read that produced no files satisfies the empty skip list below without measuring anything');
-  assert.deepEqual(raw.skips, []);
+  noLosses(raw, 'this rule resolves, so it must reach the failure channel not at all');
 });
 
 test('a directory specifier resolves to index.ts, and to index.tsx', () => {
@@ -71,8 +78,7 @@ test('a directory specifier resolves to index.ts, and to index.tsx', () => {
     'app/src/a.ts -> app/src/jsx/index.tsx',
     'app/src/a.ts -> app/src/plain/index.ts',
   ], 'a barrel directory is the common import target; both index extensions are candidates');
-  assert.ok(raw.files.length > 0, 'a read that produced no files satisfies the empty skip list below without measuring anything');
-  assert.deepEqual(raw.skips, []);
+  noLosses(raw, 'this rule resolves, so it must reach the failure channel not at all');
 });
 
 test('a tsconfig paths WILDCARD resolves across the context boundary', () => {
@@ -88,8 +94,7 @@ test('a tsconfig paths WILDCARD resolves across the context boundary', () => {
   assert.equal(raw.fileCtx['lib/src/util/helper.ts'], 'lib',
     'the target is in a different context: the whole point of the alias table is edges the relative resolver cannot see');
   assert.deepEqual(raw.tpPkgs, [], 'an alias that resolves must not also count as a package');
-  assert.ok(raw.files.length > 0, 'a read that produced no files satisfies the empty skip list below without measuring anything');
-  assert.deepEqual(raw.skips, []);
+  noLosses(raw, 'this rule resolves, so it must reach the failure channel not at all');
 });
 
 test('a tsconfig paths EXACT key resolves, and matches only on equality', () => {
@@ -104,8 +109,7 @@ test('a tsconfig paths EXACT key resolves, and matches only on equality', () => 
     'a non-wildcard key is an exact specifier match; treating it as a prefix would silently redirect @config/deep');
   assert.deepEqual(raw.tpPkgs, ['@config/deep'],
     'the unmatched specifier falls through to the third-party set rather than resolving');
-  assert.deepEqual(raw.skips, [],
-    'the third-party set is the whole disposal of a key that did not match; it must not ALSO record ts.unresolved');
+  noLosses(raw, 'the third-party set is the whole disposal of a key that did not match; it must not ALSO record ts.unresolved');
 });
 
 test('baseUrl shifts the base the alias target is joined against', () => {
@@ -119,8 +123,7 @@ test('baseUrl shifts the base the alias target is joined against', () => {
   });
   assert.deepEqual(arrows(withBase.edges), ['app/src/a.ts -> app/src/util/x.ts'],
     'the target is relative to baseUrl, so util/* means app/src/util/*');
-  assert.ok(withBase.files.length > 0, 'a read that produced no files satisfies the empty skip list below without measuring anything');
-  assert.deepEqual(withBase.skips, []);
+  noLosses(withBase, 'this rule resolves, so it must reach the failure channel not at all');
 
   const withoutBase = analyze({
     ...tree,
@@ -129,8 +132,7 @@ test('baseUrl shifts the base the alias target is joined against', () => {
   assert.deepEqual(arrows(withoutBase.edges), [],
     'without baseUrl the same table means app/util/*, which is nothing — this is what proves baseUrl did the work above');
   assert.deepEqual(withoutBase.tpPkgs, ['@u/x'], 'the missed alias becomes a package, not a skip');
-  assert.deepEqual(withoutBase.skips, [],
-    'a non-relative specifier the alias table missed is a package, never a ts.unresolved record');
+  noLosses(withoutBase, 'a non-relative specifier the alias table missed is a package, never a ts.unresolved record');
 });
 
 test('a JSONC tsconfig — comments, trailing commas, a // inside a string — parses and its aliases work', () => {
@@ -150,8 +152,7 @@ test('a JSONC tsconfig — comments, trailing commas, a // inside a string — p
       '}\n',
     'lib/src/util/helper.ts': 'export const helper = 1;\n',
   });
-  assert.deepEqual(raw.skips, [],
-    'a JSONC config tsc accepts must not record ts.tsconfig; the // inside the string value must survive stripping');
+  noLosses(raw, 'a JSONC config tsc accepts must not record ts.tsconfig; the // inside the string value must survive stripping');
   assert.deepEqual(arrows(raw.edges), ['app/src/a.ts -> lib/src/util/helper.ts'],
     'parsing is only half of it — the table read out of the stripped text has to be the real one');
 });
@@ -197,7 +198,7 @@ test('third-party specifiers are reduced to their package root, and node: builti
     'app/src/a.ts -> react',
   ], 'the edge carries the package root, so two subpaths of one package are one arrow');
   assert.deepEqual(raw.edges, [], 'nothing here resolves to a scanned file');
-  assert.deepEqual(raw.skips, [], 'a non-relative specifier that misses is a package, never an unresolved module');
+  noLosses(raw, 'a non-relative specifier that misses is a package, never an unresolved module');
 });
 
 test("a side-effect import (import 'x') is an edge when it resolves and a package when it does not", () => {
@@ -208,8 +209,7 @@ test("a side-effect import (import 'x') is an edge when it resolves and a packag
   assert.deepEqual(arrows(raw.edges), ['app/src/a.ts -> app/src/sib.ts'],
     'a bare import runs the module — the dependency is as real as a named one');
   assert.deepEqual(raw.tpPkgs, ['lodash']);
-  assert.ok(raw.files.length > 0, 'a read that produced no files satisfies the empty skip list below without measuring anything');
-  assert.deepEqual(raw.skips, []);
+  noLosses(raw, 'this rule resolves, so it must reach the failure channel not at all');
 });
 
 test('a dynamic import() and a require() are edges when they resolve and packages when they do not', () => {
@@ -226,8 +226,7 @@ test('a dynamic import() and a require() are edges when they resolve and package
     'app/src/a.ts -> app/src/req.ts',
   ], 'a lazily loaded module is still a dependency; both call shapes feed the same resolver');
   assert.deepEqual(raw.tpPkgs, ['chalk']);
-  assert.ok(raw.files.length > 0, 'a read that produced no files satisfies the empty skip list below without measuring anything');
-  assert.deepEqual(raw.skips, []);
+  noLosses(raw, 'this rule resolves, so it must reach the failure channel not at all');
 });
 
 test('a context WITH src/ roots there: root files get (root), and a .ts outside src/ is invisible and silent', () => {
@@ -241,8 +240,7 @@ test('a context WITH src/ roots there: root files get (root), and a .ts outside 
   assert.equal(raw.fileNs['app/src/a.ts'], 'app' + NS + '(root)',
     'a file directly in the source root has no first segment to name a namespace with');
   assert.equal(raw.fileNs['app/src/core/b.ts'], 'app' + NS + 'core');
-  assert.deepEqual(raw.skips, [],
-    'the invisibility is silent by design — pinning the fact, since a file the tool never saw cannot be reported as lost');
+  noLosses(raw, 'the invisibility is silent by design — pinning the fact, since a file the tool never saw cannot be reported as lost');
 });
 
 test('a context WITHOUT src/ roots at the context dir itself', () => {
@@ -272,8 +270,7 @@ test('BLIND SPOT: an inline `{ type T }` specifier is counted as a value import'
   assert.deepEqual(arrows(raw.edges), ['app/src/a.ts -> app/src/t.ts'],
     'the inline form is erased by tsc exactly like the whole-statement form, yet only the whole-statement form is excluded here');
   assert.deepEqual(raw.typeXctxEdges, [], 'both imports stay inside one context');
-  assert.deepEqual(raw.skips, [],
-    './u resolved and was dropped from edges by the type-only decision — dropped must not also mean reported lost');
+  noLosses(raw, './u resolved and was dropped from edges by the type-only decision — dropped must not also mean reported lost');
 });
 
 test('BLIND SPOT: only paths[key][0] is tried; a second fallback candidate is never reached and nothing records it', () => {

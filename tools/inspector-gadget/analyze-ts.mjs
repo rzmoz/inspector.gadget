@@ -152,10 +152,10 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
       const cfg = readTsconfig(path.join(root, c, tf), c + '/' + tf, skips);
       if (!cfg) continue;
       const baseRel = cfg.baseUrl != null
-        ? path.posix.normalize(path.posix.join(c, cfg.baseUrl.replace(/\\/g, '/')))
+        ? path.posix.join(c, cfg.baseUrl.replace(/\\/g, '/'))
         : c;
       for (const [key, first] of cfg.paths) {
-        const target = path.posix.normalize(path.posix.join(baseRel, first.replace(/\\/g, '/')));
+        const target = path.posix.join(baseRel, first.replace(/\\/g, '/'));
         if (key.endsWith('/*')) list.push({ wild: true, key: key.slice(0, -2), target });
         else list.push({ wild: false, key, target });
       }
@@ -175,18 +175,21 @@ export function build(root, excludes = DEFAULT_EXCLUDES) {
   }
   function resolve(fromFile, spec) {
     if (spec.startsWith('.')) {
-      return resolveFile(path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)));
+      return resolveFile(path.posix.join(path.posix.dirname(fromFile), spec));
     }
     const aliases = aliasOf[fileCtx[fromFile]];
     if (!aliases) return null;
     for (const a of aliases) {
       if (a.wild) {
         if (spec.startsWith(a.key + '/')) {
+          // the one normalize that is NOT redundant: join normalizes its own
+          // result and a.target is already joined, but replaceFirst splices an
+          // unnormalized specifier remainder into the middle of it
           const hit = resolveFile(path.posix.normalize(replaceFirst(a.target, '*', spec.slice(a.key.length + 1))));
           if (hit) return hit;
         }
       } else if (spec === a.key) {
-        const hit = resolveFile(path.posix.normalize(a.target));
+        const hit = resolveFile(a.target);
         if (hit) return hit;
       }
     }

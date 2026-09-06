@@ -13,40 +13,24 @@ import { withFixture, run, htmlPath, payloadOf, REPO } from './helpers/fixture.m
 import { NS_SEP, sortSkips, byStage } from '../tools/inspector-gadget/model.mjs';
 import * as analyzeTs from '../tools/inspector-gadget/analyze-ts.mjs';
 
-const RENDER = fs.readFileSync(path.join(REPO, 'tools', 'inspector-gadget', 'render.mjs'), 'utf8');
+// every .mjs that shapes the artifact. assets/ is excluded on purpose: its alpha
+// toggle sorts in the VIEWER's browser for the human reading it, which is the one
+// place locale-aware collation belongs.
+const TOOL_DIR = path.join(REPO, 'tools', 'inspector-gadget');
+// Whole-line comments are dropped before the scan: the rule's own reason, at
+// model.mjs, has to be free to name the thing it forbids, and a gate that fires
+// on prose is measuring text rather than code. A trailing comment on a code line
+// still fires — the code is on that line too.
+const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/;
+const code = (text) => text.split('\n').filter(l => !COMMENT_LINE.test(l)).join('\n');
+const TOOL_SOURCES = fs.readdirSync(TOOL_DIR, { withFileTypes: true })
+  .filter(d => d.isFile() && d.name.endsWith('.mjs'))
+  .map(d => ({ name: d.name, text: code(fs.readFileSync(path.join(TOOL_DIR, d.name), 'utf8')) }));
 
 // names whose ordinal and locale orders DISAGREE — an ordinal comparator emits
 // uppercase first, ICU collation interleaves case. A fixture of same-case names
 // would pass under either and prove nothing.
 const ordinal = (xs) => [...xs].sort();
-
-test('namespace order is ordinal, not ICU collation', () => {
-  withFixture({
-    'app/src/App/a.ts': 'export const a = 1;\n',
-    'app/src/Zed/b.ts': 'export const b = 1;\n',
-    'app/src/apple/c.ts': 'export const c = 1;\n',
-    'app/src/zebra/d.ts': 'export const d = 1;\n',
-  }, ({ root }) => {
-    const r = run(root, '--ecosystem=ts');
-    assert.equal(r.status, 0, r.stderr);
-    const names = r.json.namespaces.map(n => n.name);
-    assert.equal(names.length, 4, 'the fixture must produce all four namespaces');
-    assert.notDeepEqual(names, [...names].sort((x, y) => x.localeCompare(y)),
-      'this case is vacuous unless the two orders actually disagree here');
-    assert.deepEqual(names, ordinal(names));
-  });
-});
-
-test('third-party ties break ordinally', () => {
-  withFixture({
-    'app/src/core/a.ts': "import Z from 'Zoo';\nimport a from 'apple';\nexport const x = [Z, a];\n",
-  }, ({ root }) => {
-    const r = run(root, '--ecosystem=ts');
-    assert.equal(r.status, 0, r.stderr);
-    const pkgs = r.json.thirdParty.map(t => t.package);
-    assert.deepEqual(pkgs, ['Zoo', 'apple'], 'equal consumer counts fall through to the name comparator');
-  });
-});
 
 test('cross-context asymmetry ties break ordinally', () => {
   withFixture({
@@ -61,8 +45,15 @@ test('cross-context asymmetry ties break ordinally', () => {
   });
 });
 
-test('render.mjs reaches no ICU comparator at all', () => {
-  assert.equal(RENDER.includes('localeCompare'), false,
+test('no artifact-shaping source reaches an ICU comparator at all', () => {
+  // the breadth is the point: scoping this to render.mjs, where the bug was
+  // found, would leave model.mjs and index.mjs free to reintroduce it — and
+  // `localeCompare` alone would pass Intl.Collator, the first thing reached for
+  // when told not to use it
+  assert.ok(TOOL_SOURCES.length >= 4, 'the scan must find the tool sources or it proves nothing');
+  const icu = /localeCompare|Intl\.|toLocale/;
+  const guilty = TOOL_SOURCES.filter(m => icu.test(m.text)).map(m => m.name);
+  assert.deepEqual(guilty, [],
     'ordering that lands in the artifact must not depend on the host ICU build or default locale');
 });
 
@@ -217,6 +208,9 @@ test('the whole namespace order is pinned, and the tree groups that one order by
       nsLabel('Foxtrot', 'Zone'), nsLabel('Foxtrot', 'axle'), nsLabel('Foxtrot', 'Hub'),
       nsLabel('bravo', 'Core'), nsLabel('bravo', 'util'), nsLabel('bravo', 'Zones'),
     ], 'ordinal at every level: the context runs are ordinal-seeded and dependency-first, and inside a run so is the component walk');
+
+    assert.notDeepEqual(ordinal(nsNames), icuOrder(nsNames),
+      'the literal above is vacuous as an ORDINAL pin unless the two comparators disagree on these labels');
 
     const treeNs = firstPartyCtxNodes(payload).flatMap(c => childLabels(payload, c));
     assert.ok(treeNs.length > 0, 'the tree must carry namespace nodes for this comparison to compare anything');

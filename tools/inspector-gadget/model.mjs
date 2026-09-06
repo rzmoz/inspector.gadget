@@ -20,10 +20,11 @@ export const NS_PALETTE = [
   '#ffc9c9', '#cce5ff', '#ffe0b3', '#ffb3ba', '#c9e4ff', '#d6d6f5', '#f5d6d6', '#d6f5ec'
 ];
 
-// The one comparator every ordering in this tool routes through. localeCompare
-// depends on the host ICU build AND on the default locale, so identical input
-// on two machines emits different bytes; every order here reaches the artifact
-// or the stdout JSON, and is therefore data.
+// The comparator every comparator-TAKING sort in this tool routes through; a
+// bare .sort() is the same ordinal rule with no comparator to hand it.
+// localeCompare depends on the host ICU build AND on the default locale, so
+// identical input emits different bytes on two machines, and every order here
+// reaches the artifact or the stdout JSON.
 export const ord = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 // Skip list normalizer: dedupe on the (stage,subject,reason) triple, then
@@ -103,7 +104,7 @@ export function tarjan(nodes, adj) {
       }
     }
   }
-  return { comps, id, size: (n) => comps[id.get(n)].length };
+  return { comps, id };
 }
 
 function buildClusterAdj(clusters, edges, of) {

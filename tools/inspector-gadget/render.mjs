@@ -60,9 +60,8 @@ function triOrder(nodes, nodeOf, scc, labelFor, ctxFor, edges) {
     if (compMin[c] === null || label[i] < compMin[c]) compMin[c] = label[i];
   }
 
-  // ordinal, like every other order in this tool: this one lands in the
-  // artifact's node order, so it must not vary with the host's ICU data
-  const byCompMin = (a, b) => ord(compMin[a] ?? '', compMin[b] ?? '');
+  // the loop above fills every component, and tarjan partitions the node set
+  const byCompMin = (a, b) => ord(compMin[a], compMin[b]);
 
   const visited = new Set();
   const post = [];

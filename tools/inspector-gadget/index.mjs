@@ -114,10 +114,12 @@ function runDotnetHelper(root) {
   catch (e) { throw new Error(`could not parse dotnet helper output: ${e.message}`); }
 }
 
-// Every raw shape goes through here, single analyzer or two, so the skip list is
-// deduped and ordinal-sorted on exactly one path. The BODIES are only merged when
-// there are two: on a 20k-file target the concatenation and the re-sort are the
-// largest allocation in the run, and one analyzer needs neither.
+// Every raw shape goes through here, single analyzer or two, on ONE path. An
+// arity fast path used to skip the body merge; it also skipped the leaf-collision
+// rule below, so the rule held only when two analyzers had run — a semantic fork
+// wearing a performance rationale. Measured at 20k files: this path costs 10 ms,
+// the fast path 2 ms, against 82 ms for assemble() alone on the same input and
+// more again for render.
 export function mergeRaw(parts) {
   const skips = [];
   for (const { label, raw } of parts) {
@@ -129,37 +131,22 @@ export function mergeRaw(parts) {
       skips.push({ stage: 'analyzer.empty', subject: label, reason: 'NOFILES' });
     }
   }
-  // The raw shape belongs to its analyzer, which may still read it; sorting in
-  // place would reorder the caller's array under it.
-  if (parts.length === 1) {
-    const out = { ...parts[0].raw, files: [...parts[0].raw.files] };
-    out.files.sort();
-    out.skips = sortSkips(skips);
-    return out;
-  }
 
   const out = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [] };
   // A leaf claimed twice is index corruption, not a merge: the later claim
   // overwrites the earlier one's context and namespace and the row is counted
-  // twice in every per-file tally. The first claim stands, the rest is a loss
-  // like any other — one record per leaf, whichever analyzers collided.
+  // twice in every per-file tally. The first claim stands and the rest is a loss
+  // like any other; sortSkips collapses repeats of the identical record.
   const claimed = new Set();
-  const collided = new Set();
   for (const { raw } of parts) {
-    const prior = new Set(claimed);
+    // before this part's files are claimed, so `in` means "an EARLIER part said so"
+    for (const k in raw.fileCtx) if (!(k in out.fileCtx)) out.fileCtx[k] = raw.fileCtx[k];
+    for (const k in raw.fileNs) if (!(k in out.fileNs)) out.fileNs[k] = raw.fileNs[k];
     for (const f of raw.files) {
-      if (claimed.has(f)) {
-        if (!collided.has(f)) {
-          collided.add(f);
-          skips.push({ stage: 'analyzer.collision', subject: f, reason: 'DUPKEY' });
-        }
-        continue;
-      }
+      if (claimed.has(f)) { skips.push({ stage: 'analyzer.collision', subject: f, reason: 'DUPKEY' }); continue; }
       claimed.add(f);
       out.files.push(f);
     }
-    for (const [k, v] of Object.entries(raw.fileCtx)) if (!prior.has(k)) out.fileCtx[k] = v;
-    for (const [k, v] of Object.entries(raw.fileNs)) if (!prior.has(k)) out.fileNs[k] = v;
     out.edges.push(...raw.edges);
     out.tpEdges.push(...raw.tpEdges);
     out.tpPkgs.push(...raw.tpPkgs);

@@ -16,13 +16,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { withFixture, run, payloadOf, htmlPath, REPO, TWO_CONTEXTS } from './helpers/fixture.mjs';
+import { withFixture, run, payloadOf, htmlPath, REPO, TWO_CONTEXTS, EMPTY_RAW } from './helpers/fixture.mjs';
 import { detect, mergeRaw } from '../tools/inspector-gadget/index.mjs';
 import * as analyzeTs from '../tools/inspector-gadget/analyze-ts.mjs';
 import { NS_SEP } from '../tools/inspector-gadget/model.mjs';
 
-const EMPTY = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [], skips: [] };
-const part = (label, raw) => ({ label, raw: { ...EMPTY, ...raw } });
+const part = (label, raw) => ({ label, raw: { ...EMPTY_RAW, ...raw } });
 const collisions = (m) => m.skips.filter(s => s.stage === 'analyzer.collision');
 
 test('two analyzers claiming the same leaf is recorded, and the second claim is dropped', () => {
@@ -43,17 +42,25 @@ test('two analyzers claiming the same leaf is recorded, and the second claim is 
   assert.deepEqual(collisions(m), [{ stage: 'analyzer.collision', subject: 'dup', reason: 'DUPKEY' }]);
 });
 
-test('a duplicate inside ONE analyzer output is the same loss and is recorded too', () => {
-  const m = mergeRaw([
+test('a duplicate inside ONE analyzer output is the same loss, and a lone analyzer reaches the same rule', () => {
+  // one part, deliberately: the rule used to sit behind an arity fast path, so a
+  // single-analyzer run — every --ecosystem=dotnet run there is — never reached it
+  const solo = mergeRaw([
+    part('ts', { files: ['a', 'a', 'b'], fileCtx: { a: 'app', b: 'app' }, fileNs: { a: 'app · x', b: 'app · x' } }),
+  ]);
+  assert.deepEqual(solo.files, ['a', 'b']);
+  assert.deepEqual(collisions(solo), [{ stage: 'analyzer.collision', subject: 'a', reason: 'DUPKEY' }]);
+
+  const withSecond = mergeRaw([
     part('ts', { files: ['a', 'a', 'b'], fileCtx: { a: 'app', b: 'app' }, fileNs: { a: 'app · x', b: 'app · x' } }),
     part('dotnet', { files: ['c'], fileCtx: { c: 'Svc' }, fileNs: { c: 'Svc · y' } }),
   ]);
-  assert.deepEqual(m.files, ['a', 'b', 'c']);
-  assert.deepEqual(collisions(m), [{ stage: 'analyzer.collision', subject: 'a', reason: 'DUPKEY' }]);
+  assert.deepEqual(withSecond.files, ['a', 'b', 'c']);
+  assert.deepEqual(collisions(withSecond), collisions(solo), 'a second analyzer changes nothing about the first one own duplicate');
 });
 
 test('mergeRaw does not sort the array its caller still owns', () => {
-  const raw = { ...EMPTY, files: ['b', 'a'] };
+  const raw = { ...EMPTY_RAW, files: ['b', 'a'] };
   const m = mergeRaw([{ label: 'ts', raw }]);
   assert.deepEqual(raw.files, ['b', 'a'], 'the analyzer output is the caller property, not scratch space');
   assert.deepEqual(m.files, ['a', 'b']);
@@ -86,7 +93,7 @@ test('the single-part branch passes every other key through untouched', () => {
   // array an in-place `.sort()` — the plausible "make it deterministic" edit —
   // moves nothing and leaves the pass-through claim unmeasured either way
   const raw = {
-    ...EMPTY,
+    ...EMPTY_RAW,
     files: ['b', 'a'], fileCtx: { a: 'app', b: 'app' }, fileNs: { a: 'app · x', b: 'app · y' },
     edges: [['b', 'a'], ['a', 'b']], tpEdges: [['b', 'vue'], ['a', 'react']],
     tpPkgs: ['react', 'preact'], typeXctxEdges: [['b', 'a'], ['a', 'b']],
@@ -110,7 +117,7 @@ test('the single-part branch passes every other key through untouched', () => {
 
 test('the wire shape does not depend on how many analyzers ran', () => {
   // the authority for that shape is what an analyzer actually returns. Seeding
-  // this from the file own EMPTY compares two hand-written key lists and is
+  // this from the file own EMPTY_RAW compares two hand-written key lists and is
   // blind to the drift it exists to catch: a key added to analyze-ts.mjs (or to
   // RawDto) that the spread branch carries and the two-part literal drops.
   withFixture(TWO_CONTEXTS, ({ root }) => {

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { makeFixture, withFixture, danglingSymlink, run, htmlPath, TWO_CONTEXTS, ASSETS, REPO } from './helpers/fixture.mjs';
+import { makeFixture, withFixture, danglingSymlink, run, htmlPath, TWO_CONTEXTS, ASSETS, REPO, EMPTY_RAW } from './helpers/fixture.mjs';
 import { assemble } from '../tools/inspector-gadget/model.mjs';
 import * as analyzeTs from '../tools/inspector-gadget/analyze-ts.mjs';
 import { render } from '../tools/inspector-gadget/render.mjs';
@@ -226,7 +226,7 @@ test('an incomplete scan that still finds ONE ecosystem is recorded, not silentl
 });
 
 test('mergeRaw records an analyzer that cannot say what it lost, and one that found nothing', () => {
-  const empty = { files: [], fileCtx: {}, fileNs: {}, edges: [], tpEdges: [], tpPkgs: [], typeXctxEdges: [], skips: [] };
+  const empty = EMPTY_RAW;
   const one = { ...empty, files: ['a'], fileCtx: { a: 'c' }, fileNs: { a: 'c · n' } };
 
   const contract = mergeRaw([{ label: 'dotnet', raw: { ...one, skips: undefined } }]);
