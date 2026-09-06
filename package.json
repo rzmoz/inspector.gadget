@@ -1,0 +1,9 @@
+{
+  "name": "inspector-gadget",
+  "private": true,
+  "license": "MIT",
+  "description": "Structural read of a codebase: an interactive DSM artifact plus a namespace-level overview. Zero dependencies.",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\""
+  }
+}
